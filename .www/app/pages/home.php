@@ -1,150 +1,82 @@
 <?php
-session_start();
+// Load config from anywhere relative to this file
+$configFile = __DIR__ . '/../config/config.php';
+if (!file_exists($configFile)) die("Config file not found at $configFile");
+$config = require $configFile;
 
-// --- Load accounts JSON ---
-$accountsFile = __DIR__ . '/data/accounts.json';
-$accounts = [];
-if(file_exists($accountsFile)){
-    $accounts = json_decode(file_get_contents($accountsFile), true) ?? [];
-}
-
-// --- Load transactions CSV ---
-$transactionsFile = __DIR__ . '/data/transactions.csv';
-$recentTransactions = [];
-if(file_exists($transactionsFile)){
-    if(($handle = fopen($transactionsFile, 'r')) !== FALSE){
-        $header = fgetcsv($handle, 0, ',', '"', '\\'); // specify escape char
-        while(($row = fgetcsv($handle, 0, ',', '"', '\\')) !== FALSE){
-            if(count($row) >= count($header)){
-                $recentTransactions[] = array_combine($header, array_slice($row,0,count($header)));
-            }
-        }
-        fclose($handle);
-    }
-}
-$recentTransactions = array_reverse($recentTransactions); // newest first
-
-// --- Helpers ---
-function maskAccount($acct){ return '**** **** **** ' . substr($acct,-4); }
-function formatCurrency($amt){ return '$' . number_format((float)$amt,2); }
-
-// --- Device detection ---
-$userAgent = strtolower($_SERVER['HTTP_USER_AGENT'] ?? '');
-$isApple = preg_match('/iphone|ipad|ipod/', $userAgent);
-$isAndroid = preg_match('/android/', $userAgent);
-
-// --- Insights ---
-$insights = [
-    "You spent $250.00 at groceries this week. Consider setting a budget.",
-    "Your savings account earned $12.50 in interest last month.",
-    "Upcoming bill: $120.00 due in 3 days."
-];
-?><!DOCTYPE html>
+$profileName = $config['sendername'] ?? 'N/A';
+$lastLogin = $config['last_login'] ?? date("Y-m-d H:i:s");
+$balance = $config['balance'] ?? '0.00';
+$recentTransactions = $config['recent_transactions'] ?? []; // Array of ['date','desc','amount']
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Home | KOHO</title>
-<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>
-body { font-family:'Poppins', sans-serif; background:#f4f5f7; color:#1d123c; margin:0; padding:20px; }
-h2,h3 { font-weight:600; margin-bottom:15px; }
-.account-cards-wrapper { overflow-x:auto; display:flex; gap:15px; padding-bottom:10px; scroll-behavior:smooth; }
-.account-card { min-width:250px; background:#1d123c; color:#fff; border-radius:12px; padding:20px; flex-shrink:0; box-shadow:0 4px 12px rgba(0,0,0,.2); cursor:pointer; transition: transform .2s; }
-.account-card:hover { transform: translateY(-3px); box-shadow:0 8px 18px rgba(0,0,0,.25); }
-.account-info span { display:block; font-size:14px; opacity:0.85; }
-.account-info .type { font-weight:600; font-size:16px; }
-.account-balance { font-size:22px; font-weight:700; margin-top:10px; text-align:center; }
-
-.wallet-btn { margin-top:15px; display:flex; justify-content:center; gap:15px; }
-.wallet-btn img { height:48px; cursor:pointer; transition: transform .2s; }
-.wallet-btn img:hover { transform: scale(1.05); }
-
-.transactions { margin-top:25px; }
-.transactions table { width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; font-size:0.65rem; } /* smaller font */
-.transactions th, .transactions td { padding:6px 8px; text-align:left; }
-.transactions th { background:#f0f0f0; font-weight:600; }
-.transactions tr { border-bottom:1px solid #eee; }
-.transactions tr:last-child { border-bottom:none; }
-.transactions td.amount { text-align:right; }
-.transactions td.amount.negative { color:#ff3b3b; }
-.transactions td.amount.positive { color:#2ecc71; }
-
-.insights { margin-top:25px; background:#fff; border-radius:12px; padding:15px; box-shadow:0 4px 12px rgba(0,0,0,.1); font-size:0.75rem; }
-.insights ul { list-style:none; padding-left:0; }
-.insights ul li { margin-bottom:8px; display:flex; align-items:center; gap:8px; }
-.insights ul li i { color:#c5e600; }
-
-@media(max-width:600px){ .wallet-btn img{height:40px;} }
+body { font-size: 0.82rem; background: #f2f2f2; margin:0; padding:0; }
+.card { margin: 8px; border-radius: 0.5rem; }
+.balance { font-size: 1.2rem; font-weight: bold; color: #198754; }
+.btn-sm { font-size: 0.75rem; padding: 0.35rem 0.6rem; }
+.transaction { font-size: 0.75rem; }
+.transaction-date { color: #6c757d; }
+.transaction-amount { font-weight: 600; }
 </style>
 </head>
 <body>
 
-    <!-- Account Cards -->
-    <div class="account-cards-wrapper">
-        <?php foreach($accounts as $acc): ?>
-            <div class="account-card" onclick="showAccountTransactions('<?= htmlspecialchars($acc['number'] ?? '') ?>')">
-                <div class="account-info">
-                    <span class="type"><?= htmlspecialchars($acc['type'] ?? 'Checking') ?></span>
-                    <span><?= isset($acc['number']) ? maskAccount($acc['number']) : '' ?></span>
-                    <?php if(!empty($acc['available'])): ?><span class="extra">Available: <?= formatCurrency($acc['available']) ?></span><?php endif; ?>
-                </div>
-                <div class="account-balance"><?= formatCurrency($acc['balance'] ?? 0) ?></div>
+<div class="container mt-2">
 
-                <!-- Wallet Buttons -->
-                <div class="wallet-btn">
-                    <?php if($isApple): ?>
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Add_to_Apple_Wallet_badge.svg/1200px-Add_to_Apple_Wallet_badge.svg.png" alt="Add to Apple Wallet">
-                    <?php elseif($isAndroid): ?>
-                        <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/b/bb/Add_to_Google_Wallet_badge.svg/1200px-Add_to_Google_Wallet_badge.svg.png" alt="Add to Google Wallet">
-                    <?php else: ?>
-                        <span class="text-light small">Wallet not supported</span>
-                    <?php endif; ?>
-                </div>
-
-            </div>
-        <?php endforeach; ?>
-    </div>
-
-    <!-- Transactions Table -->
-    <div class="transactions" id="transactions-container">
-        <h3>Recent Transactions</h3>
-        <p>Select an account to view its transactions.</p>
-    </div>
-
-    <!-- Insights -->
-    <div class="insights">
-        <h3>Insights & Notifications</h3>
-        <ul>
-            <?php foreach($insights as $insight): ?>
-                <li><i class="fa-solid fa-lightbulb"></i><?= htmlspecialchars($insight) ?></li>
-            <?php endforeach; ?>
-        </ul>
-    </div>
+<!-- Welcome and Balance -->
+<div class="card shadow-sm">
+<div class="card-body text-center">
+<p class="mb-1"><?= htmlspecialchars($profileName) ?></p>
+<p class="small mb-1">Last login: <?= htmlspecialchars($lastLogin) ?></p>
+<p class="balance mb-0">$<?= number_format($balance, 2) ?></p>
+</div>
 </div>
 
-<script>
-const transactions = <?= json_encode($recentTransactions) ?>;
+<!-- Quick Actions -->
+<div class="row text-center mb-2">
+<div class="col-6 mb-1">
+<a href="accounts.php" class="btn btn-outline-primary w-100 btn-sm">Accounts</a>
+</div>
+<div class="col-6 mb-1">
+<a href="contacts.php" class="btn btn-outline-primary w-100 btn-sm">Contacts</a>
+</div>
+<div class="col-6 mb-1">
+<a href="transactions.php" class="btn btn-outline-primary w-100 btn-sm">Transactions</a>
+</div>
+<div class="col-6 mb-1">
+<a href="settings.php" class="btn btn-outline-primary w-100 btn-sm">Settings</a>
+</div>
+</div>
 
-function showAccountTransactions(accountNumber){
-    const container = document.getElementById('transactions-container');
-    const filtered = transactions.filter(tx => tx.account_number === accountNumber || tx.account === accountNumber);
-    if(filtered.length === 0){
-        container.innerHTML = "<h3>Recent Transactions</h3><p>No transactions for this account.</p>";
-        return;
-    }
-    let html = "<h3>Transactions for " + accountNumber.slice(-4) + "</h3><table><thead><tr><th>Date</th><th>Description</th><th>Amount</th></tr></thead><tbody>";
-    filtered.forEach(tx => {
-        const amount = parseFloat(tx.amount);
-        html += "<tr><td>"+tx.date+"</td><td>"+tx.description+"</td><td class='amount "+(amount<0?"negative":"positive")+"'>"+(amount<0?"-":"+")+"$"+Math.abs(amount).toFixed(2)+"</td></tr>";
-    });
-    html += "</tbody></table>";
-    container.innerHTML = html;
-}
-</script>
+<!-- Recent Transactions -->
+<div class="card shadow-sm">
+<div class="card-body">
+<?php if(!empty($recentTransactions)): ?>
+<ul class="list-group list-group-flush small">
+<?php foreach($recentTransactions as $tx): ?>
+<li class="list-group-item d-flex justify-content-between align-items-center transaction">
+<span>
+<span class="transaction-date"><?= htmlspecialchars($tx['date'] ?? '') ?></span> - 
+<?= htmlspecialchars($tx['desc'] ?? '') ?>
+</span>
+<span class="transaction-amount">$<?= number_format($tx['amount'] ?? 0, 2) ?></span>
+</li>
+<?php endforeach; ?>
+</ul>
+<?php else: ?>
+<p class="text-muted small mb-0">No recent transactions</p>
+<?php endif; ?>
+</div>
+</div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
