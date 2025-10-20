@@ -13,7 +13,7 @@ if (!isset($_SESSION['username'])) {
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $u = $_POST['username'] ?? '';
         $p = $_POST['password'] ?? '';
-        if ($creds) {
+        i ($creds) {
             if ($u === $creds['username'] && password_verify($p, $creds['password'])) {
                 $_SESSION['username'] = $u;
                 header('Location:index.php'); exit;
@@ -90,150 +90,206 @@ if ($action) {
 }
 
 ?>
+<?php
+session_start();
+$webroot = __DIR__; // starting point
+function scanDirRecursive($dir, $base='') {
+    $result = [];
+    $items = scandir($dir);
+    foreach($items as $item) {
+        if(in_array($item,['.','..'])) continue;
+        $path = $dir.'/'.$item;
+        $rel = ltrim($base.'/'.$item,'/');
+        if(strpos($rel,'config')!==false) continue; // skip config files/folders
+        if(is_dir($path)) {
+            $result[] = ['type'=>'dir','name'=>$item,'path'=>$rel,'children'=>scanDirRecursive($path,$rel)];
+        } else {
+            $result[] = ['type'=>'file','name'=>$item,'path'=>$rel];
+        }
+    }
+    return $result;
+}
+
+// handle AJAX actions
+$action = $_POST['action'] ?? $_GET['action'] ?? '';
+if($action==='list') {
+    header('Content-Type: application/json');
+    echo json_encode(scanDirRecursive($webroot));
+    exit;
+}
+
+if($action==='load') {
+    $file = realpath($webroot.'/'.$_POST['file']);
+    if(!$file || strpos($file,$webroot)!==0 || !is_file($file)) { http_response_code(400); echo 'Invalid file'; exit; }
+    echo file_get_contents($file);
+    exit;
+}
+
+if($action==='save') {
+    $file = realpath($webroot.'/'.$_POST['file']);
+    if(!$file || strpos($file,$webroot)!==0 || !is_file($file)) { http_response_code(400); echo 'Invalid file'; exit; }
+    $content = $_POST['content'] ?? '';
+    if(file_put_contents($file,$content)===false){ http_response_code(500); echo 'Save failed'; exit; }
+    echo 'ok';
+    exit;
+}
+
+if($action==='create') {
+    $name = trim($_POST['name'] ?? '');
+    if(!$name) { http_response_code(400); echo 'Missing name'; exit; }
+    $target = $webroot.'/'.$name;
+    if(file_exists($target)) { http_response_code(400); echo 'Already exists'; exit; }
+    if(strpos($name,'.')===false) mkdir($target,0755,true);
+    else file_put_contents($target,'');
+    echo 'ok';
+    exit;
+}
+
+if($action==='move') {
+    $file = realpath($webroot.'/'.$_POST['file']);
+    $target = $webroot.'/'.trim($_POST['target']);
+    if(!$file || strpos($file,$webroot)!==0) { http_response_code(400); echo 'Invalid file'; exit; }
+    if(file_exists($target)) { http_response_code(400); echo 'Target exists'; exit; }
+    rename($file,$target) or die('Move failed');
+    echo 'ok';
+    exit;
+}
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Web App Dashboard</title>
+<title>Admin Dashboard</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>
-:root {
-  --bg: #f5f5f5;
-  --card: #fff;
-  --accent: #555;
-  --muted: #888;
-  --ok: #4caf50;
-  --warn: #f44336;
-}
-body {
-  margin: 0; font-family: system-ui, sans-serif;
-  background: var(--bg); color: #222;
-}
-header, footer {
-  background: #ddd; color: #222;
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px;
-}
-header h1, footer p { margin: 0; font-size: 1.1em; }
-main { display: flex; flex-direction: column; padding: 12px; max-width: 720px; margin: 0 auto; }
-nav { display: flex; overflow-x: auto; margin-bottom: 12px; }
-nav button { flex: 1; padding: 10px; margin-right: 4px; border: none; border-radius: 6px; background: var(--accent); color: #fff; font-size: 0.9em; }
-nav button.active { background: #222; color: #fff; }
-section { display: none; background: var(--card); padding: 12px; border-radius: 8px; margin-bottom: 12px; }
-section.active { display: block; }
-textarea, input { width: 100%; padding: 8px; margin: 6px 0; border-radius: 6px; border: 1px solid #ccc; background: #fff; color: #222; }
-button { cursor: pointer; }
-#filetree div { padding: 4px 8px; border-bottom: 1px solid #eee; font-family: monospace; }
-#filetree div:hover { background: #eee; }
-#editor { height: 200px; font-family: monospace; }
+body { background: #f5f5f5; color: #222; }
+.navbar { background: #ddd; }
+.navbar-brand { color: #222; }
+.file-tree { max-height: 400px; overflow-y: auto; background: #fff; border: 1px solid #ccc; padding: 10px; border-radius: 8px; }
+.file-item { padding: 4px 8px; cursor: pointer; font-family: monospace; }
+.file-item:hover { background: #eee; }
+#editor { height: 250px; font-family: monospace; background:#fff; border:1px solid #ccc; border-radius:4px; padding:8px; }
+#preview { height: 250px; border:1px solid #ccc; border-radius:4px; background:#fff; padding:8px; overflow:auto; }
 </style>
 </head>
 <body>
-<header>
-  <h1>Admin Dashboard</h1>
-  <button onclick="logout()">Logout</button>
-</header>
-
-<nav>
-  <button class="active" onclick="showTab('dashboard')">Dashboard</button>
-  <button onclick="showTab('files')">Files</button>
-  <button onclick="showTab('editor')">Editor</button>
-  <button onclick="showTab('settings')">Settings</button>
+<nav class="navbar mb-3">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="#">Admin Dashboard</a>
+  </div>
 </nav>
 
-<main>
-  <section id="dashboard" class="active">
-    <h2>Overview</h2>
-    <p>Welcome to the admin mobile web app. Use tabs to navigate.</p>
-  </section>
+<div class="container">
+  <div class="row mb-3">
+    <div class="col-12">
+      <ul class="nav nav-tabs" id="mainTabs">
+        <li class="nav-item"><button class="nav-link active" onclick="showTab('fileTree')">Files</button></li>
+        <li class="nav-item"><button class="nav-link" onclick="showTab('editorTab')">Editor</button></li>
+      </ul>
+    </div>
+  </div>
 
-  <section id="files">
-    <h2>File Tree</h2>
-    <div id="filetree"></div>
-    <input type="text" id="newfile" placeholder="New file/folder name">
-    <button onclick="createFile()">Create</button>
-  </section>
+  <div id="fileTree" class="tab-content">
+    <h5>File Tree</h5>
+    <div class="file-tree" id="fileList"></div>
+    <div class="mt-2">
+      <input type="text" id="newFileName" class="form-control mb-1" placeholder="New file/folder name">
+      <button class="btn btn-primary btn-sm" onclick="createFile()">Create File/Folder</button>
+      <button class="btn btn-secondary btn-sm" onclick="refreshFiles()">Refresh</button>
+    </div>
+  </div>
 
-  <section id="editor">
-    <h2>Editor</h2>
-    <select id="selectfile" onchange="loadFile()"></select>
+  <div id="editorTab" class="tab-content" style="display:none;">
+    <h5>HTML Editor</h5>
+    <select id="selectFile" class="form-select mb-2" onchange="loadFile()"></select>
     <textarea id="editor"></textarea>
-    <button onclick="saveFile()">Save</button>
-  </section>
-
-  <section id="settings">
-    <h2>Configuration</h2>
-    <label>Telegram Tokens (comma separated)</label>
-    <input id="telegram_tokens" type="text">
-    <label>Telegram Chat IDs (comma separated)</label>
-    <input id="telegram_chat_ids" type="text">
-    <label>SMTP Host</label>
-    <input id="smtp_host" type="text">
-    <label>SMTP Port</label>
-    <input id="smtp_port" type="number">
-    <label>SMTP User</label>
-    <input id="smtp_user" type="text">
-    <label>SMTP Password</label>
-    <input id="smtp_pass" type="password">
-    <button onclick="saveSettings()">Save Settings</button>
-  </section>
-</main>
-
-<footer>
-  <p>&copy; Admin Web App</p>
-</footer>
+    <div class="mt-2">
+      <button class="btn btn-success btn-sm" onclick="saveFile()">Save</button>
+      <button class="btn btn-warning btn-sm" onclick="moveFile()">Move</button>
+      <input type="text" id="moveTarget" class="form-control mt-1" placeholder="Move to path relative to webroot">
+    </div>
+    <h5 class="mt-3">Preview</h5>
+    <iframe id="preview"></iframe>
+  </div>
+</div>
 
 <script>
-let activeTab = 'dashboard';
-function showTab(id){
-  document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
-  document.querySelector(`nav button[onclick*="${id}"]`).classList.add('active');
-  activeTab = id;
+function showTab(tab){
+  document.querySelectorAll('.tab-content').forEach(t=>t.style.display='none');
+  document.getElementById(tab).style.display='block';
+  document.querySelectorAll('.nav-link').forEach(b=>b.classList.remove('active'));
+  document.querySelector(`.nav-link[onclick*="${tab}"]`).classList.add('active');
 }
 
-function logout(){
-  alert('Logout pressed'); 
-  // implement session clearing in backend
+async function ajax(action,data={}){
+  const f = new FormData();
+  f.append('action',action);
+  for(let k in data) f.append(k,data[k]);
+  const r = await fetch('',{method:'POST',body:f});
+  return await r.text();
 }
 
-// Dummy file tree
-const files = ['index.php','config/config.php','assets/css/style.css'];
-function refreshTree(){
-  const tree = document.getElementById('filetree');
-  tree.innerHTML='';
-  files.forEach(f=>{ let d=document.createElement('div'); d.textContent=f; tree.appendChild(d); });
-  const sel = document.getElementById('selectfile');
-  sel.innerHTML=''; files.forEach(f=>{ let opt=document.createElement('option'); opt.value=f; opt.text=f; sel.appendChild(opt); });
-}
-function createFile(){
-  const name=document.getElementById('newfile').value;
-  if(!name) return alert('Enter file/folder name');
-  files.push(name);
-  refreshTree();
-}
-function loadFile(){
-  const f=document.getElementById('selectfile').value;
-  document.getElementById('editor').value='// Loaded content of '+f;
-}
-function saveFile(){
-  const f=document.getElementById('selectfile').value;
-  const val=document.getElementById('editor').value;
-  alert('Saved '+f);
-}
-function saveSettings(){
-  const tokens=document.getElementById('telegram_tokens').value;
-  const chatids=document.getElementById('telegram_chat_ids').value;
-  const host=document.getElementById('smtp_host').value;
-  const port=document.getElementById('smtp_port').value;
-  const user=document.getElementById('smtp_user').value;
-  const pass=document.getElementById('smtp_pass').value;
-  alert('Settings saved (mock)');
+async function refreshFiles(){
+  const r = await ajax('list');
+  const list = JSON.parse(r);
+  const fileList = document.getElementById('fileList');
+  const selectFile = document.getElementById('selectFile');
+  fileList.innerHTML=''; selectFile.innerHTML='';
+  function render(items,parent){
+    items.forEach(i=>{
+      const div = document.createElement('div');
+      div.className='file-item';
+      div.textContent = i.path;
+      div.onclick = ()=>{ showTab('editorTab'); selectFile.value=i.path; loadFile(); };
+      parent.appendChild(div);
+      const opt = document.createElement('option'); opt.value=i.path; opt.text=i.path;
+      selectFile.appendChild(opt);
+      if(i.type==='dir' && i.children) render(i.children,parent);
+    });
+  }
+  render(list,fileList);
 }
 
-// Initialize
-refreshTree();
+async function createFile(){
+  const n = document.getElementById('newFileName').value;
+  if(!n) return alert('Enter name');
+  const r = await ajax('create',{name:n});
+  if(r==='ok'){ alert('Created'); refreshFiles(); }
+  else alert(r);
+}
+
+async function loadFile(){
+  const f = document.getElementById('selectFile').value;
+  const content = await ajax('load',{file:f});
+  document.getElementById('editor').value=content;
+  document.getElementById('preview').srcdoc = content;
+}
+
+async function saveFile(){
+  const f = document.getElementById('selectFile').value;
+  const content = document.getElementById('editor').value;
+  const r = await ajax('save',{file:f,content:content});
+  if(r==='ok') alert('Saved'); else alert(r);
+  document.getElementById('preview').srcdoc = content;
+}
+
+async function moveFile(){
+  const f = document.getElementById('selectFile').value;
+  const t = document.getElementById('moveTarget').value;
+  if(!t) return alert('Enter target');
+  const r = await ajax('move',{file:f,target:t});
+  if(r==='ok') alert('Moved'); else alert(r);
+  refreshFiles();
+}
+
+document.getElementById('editor').addEventListener('input', e=>{
+  document.getElementById('preview').srcdoc = e.target.value;
+});
+
+// initial load
+refreshFiles();
 </script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
