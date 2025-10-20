@@ -1,57 +1,77 @@
 <?php
 session_start();
 
-// HARDSET ADMIN CREDENTIALS (first login)
-$users = ['admin'=>password_hash('AdminPass123', PASSWORD_DEFAULT)];
-$msg='';
+// Path to store credentials
+$credFile = __DIR__.'/config/admin_credentials.php';
+
+// Load existing credentials if available
+$creds = file_exists($credFile) ? require $credFile : null;
+$msg = '';
 
 // LOGIN HANDLING
 if (!isset($_SESSION['username'])) {
-    if ($_SERVER['REQUEST_METHOD']==='POST'){
-        $u=$_POST['username']??'';
-        $p=$_POST['password']??'';
-        if(isset($users[$u]) && password_verify($p,$users[$u])){
-            $_SESSION['username']=$u;
-            header('Location:index.php'); exit;
-        } else $msg='Invalid credentials';
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $u = $_POST['username'] ?? '';
+        $p = $_POST['password'] ?? '';
+
+        if ($creds) {
+            // credentials already set, check against them
+            if ($u === $creds['username'] && password_verify($p, $creds['password'])) {
+                $_SESSION['username'] = $u;
+                header('Location:index.php'); exit;
+            } else {
+                $msg = 'Invalid credentials';
+            }
+        } else {
+            // first login: save credentials
+            $hash = password_hash($p, PASSWORD_DEFAULT);
+            $php = "<?php\nreturn ['username' => '".addslashes($u)."', 'password' => '$hash'];\n";
+            if (!is_dir(__DIR__.'/config')) mkdir(__DIR__.'/config', 0755, true);
+            if (file_put_contents($credFile, $php)) {
+                $_SESSION['username'] = $u;
+                header('Location:index.php'); exit;
+            } else {
+                $msg = 'Failed to save credentials';
+            }
+        }
     }
+
+    // Login form
     ?>
     <!doctype html>
-    <html lang="en"><head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1.0">
-    <title>Admin Login</title>
-    <style>
-        body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#f5f5f5;font-family:system-ui;color:#111}
-        form{background:#e0e0e0;padding:24px;border-radius:12px;width:320px;display:flex;flex-direction:column;box-shadow:0 4px 12px rgba(0,0,0,0.12)}
-        input{margin:8px 0;padding:10px;border-radius:8px;border:1px solid #ccc;background:#fff;color:#111}
-        button{margin-top:12px;padding:12px;border:none;border-radius:8px;background:#333;color:#fff;cursor:pointer}
-        button:hover{background:#555}
-        .msg{color:#d32f2f;text-align:center;margin:4px 0}
-        h2{text-align:center;margin:0 0 12px 0}
-    </style>
+    <html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1.0">
+        <title>Admin Login</title>
+        <style>
+            body{margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#f5f5f5;font-family:system-ui;color:#111}
+            form{background:#e0e0e0;padding:24px;border-radius:12px;width:320px;display:flex;flex-direction:column;box-shadow:0 4px 12px rgba(0,0,0,0.12)}
+            input{margin:8px 0;padding:10px;border-radius:8px;border:1px solid #ccc;background:#fff;color:#111}
+            button{margin-top:12px;padding:12px;border:none;border-radius:8px;background:#333;color:#fff;cursor:pointer}
+            button:hover{background:#555}
+            .msg{color:#d32f2f;text-align:center;margin:4px 0}
+            h2{text-align:center;margin:0 0 12px 0}
+        </style>
     </head>
     <body>
-    <form method="post">
-        <h2>Admin Login</h2>
-        <?php if($msg):?><div class="msg"><?=htmlspecialchars($msg)?></div><?php endif;?>
-        <input name="username" placeholder="Username" required>
-        <input name="password" type="password" placeholder="Password" required>
-        <button type="submit">Login</button>
-    </form>
+        <form method="post">
+            <h2>Admin Login</h2>
+            <?php if($msg):?><div class="msg"><?=htmlspecialchars($msg)?></div><?php endif;?>
+            <input name="username" placeholder="Username" required>
+            <input name="password" type="password" placeholder="Password" required>
+            <button type="submit">Login</button>
+        </form>
     </body>
     </html>
-    <?php exit;
+    <?php
+    exit;
 }
 
 // LOGOUT
-if(isset($_GET['logout'])){ session_destroy(); header('Location:index.php'); exit; }
+if(isset($_GET['logout'])) { session_destroy(); header('Location:index.php'); exit; }
 
-// Load app config
-$configFile = __DIR__.'/config/config.php';
-$config = file_exists($configFile) ? require $configFile : [];
-
-$www = __DIR__;
+// Logged in: admin panel placeholder
 ?>
 <!DOCTYPE html>
 <html lang="en">
