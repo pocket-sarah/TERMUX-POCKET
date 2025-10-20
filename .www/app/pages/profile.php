@@ -1,19 +1,107 @@
 <?php
-// Locate project root dynamically
-$rootDir = dirname(__DIR__); // one level up from .www
-$configFile = $rootDir . '/config/config.php';
+// Robust config locator. Returns loaded $config array or dies with helpful diagnostics.
+// Usage: include this at top of any script that needs config.
 
-// Fallback: try relative to current file if above fails
-if (!file_exists($configFile)) {
-    $configFile = __DIR__ . '/../config/config.php';
+function load_config_file(): array {
+    $tried = [];
+
+    // helper to test a candidate path
+    $test = function(string $path) use (&$tried) {
+        $real = $path === '' ? '' : @realpath($path);
+        $tried[] = $real ?: $path;
+        if ($real && is_file($real) && is_readable($real)) {
+            return $real;
+        }
+        return false;
+    };
+
+    // 1) explicit env override
+    $env = getenv('CONFIG_PATH');
+    if ($env) {
+        if ($found = $test($env)) {
+            return require $found;
+        }
+    }
+
+    // 2) if WEBROOT env set, check WEBROOT/config/config.php and WEBROOT/config.php
+    $webroot = getenv('WEBROOT') ?: (isset($_SERVER['DOCUMENT_ROOT']) ? $_SERVER['DOCUMENT_ROOT'] : '');
+    if ($webroot) {
+        if ($found = $test($webroot . '/config/config.php')) return require $found;
+        if ($found = $test($webroot . '/config.php')) return require $found;
+    }
+
+    // 3) check common locations relative to script file (__DIR__) and cwd
+    $starts = [
+        __DIR__,                    // current file dir
+        getcwd() ?: '',             // current working dir
+        dirname(__DIR__),           // parent
+        dirname(dirname(__DIR__)),  // parent parent
+    ];
+
+    // also include home and root as fallback
+    if (!empty(getenv('HOME'))) $starts[] = getenv('HOME');
+    $starts[] = '/';
+
+    // for each start, walk up N levels and test patterns
+    $maxUp = 8;
+    foreach ($starts as $s) {
+        $s = $s ?: '';
+        $cur = $s;
+        for ($i = 0; $i <= $maxUp && $cur !== DIRECTORY_SEPARATOR; $i++) {
+            // Patterns to test at this level
+            $candidates = [
+                $cur . '/.www/config/config.php',
+                $cur . '/.www/config.php',
+                $cur . '/config/config.php',
+                $cur . '/config.php'
+            ];
+            foreach ($candidates as $cand) {
+                if ($found = $test($cand)) return require $found;
+            }
+            // move up
+            $parent = dirname($cur);
+            if ($parent === $cur) break;
+            $cur = $parent;
+        }
+    }
+
+    // 4) try DOCUMENT_ROOT relative checks if available
+    if (!empty($_SERVER['DOCUMENT_ROOT'])) {
+        $dr = $_SERVER['DOCUMENT_ROOT'];
+        if ($found = $test($dr . '/config/config.php')) return require $found;
+        if ($found = $test($dr . '/../config/config.php')) return require $found; // sibling
+    }
+
+    // 5) last-ditch: attempt to find under /data (Termux) quick search shallow (non-recursive)
+    $possibleRoots = ['/data/data', '/sdcard', '/storage', '/mnt', '/home'];
+    foreach ($possibleRoots as $r) {
+        if (!is_dir($r)) continue;
+        $entries = @scandir($r) ?: [];
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') continue;
+            $candidate = $r . '/' . $entry . '/.www/config/config.php';
+            if ($found = $test($candidate)) return require $found;
+        }
+    }
+
+    // Not found. Prepare diagnostic and abort.
+    $dbg = "<h2>Config file not found</h2>\n";
+    $dbg .= "<p>Looked for <code>config/config.php</code> in multiple locations. Set <code>CONFIG_PATH</code> or <code>WEBROOT</code> env to the correct path.</p>\n";
+    $dbg .= "<pre>Tried paths:\n" . implode("\n", array_unique($tried)) . "\n</pre>\n";
+    // If request from browser, show HTML. Otherwise plain text.
+    if (php_sapi_name() !== 'cli') {
+        header('Content-Type: text/html; charset=utf-8', true, 500);
+        echo $dbg;
+    } else {
+        fwrite(STDERR, strip_tags($dbg) . PHP_EOL);
+    }
+    exit(1);
 }
-if (!file_exists($configFile)) {
-    die("Config file not found. Expected at: " . htmlspecialchars($configFile));
-}
 
-$config = require $configFile;
+// load config
+$config = load_config_file();
 
-// Build profile
+// now safe to use $config
 $profile = [
     'name'         => $config['sendername'] ?? 'N/A',
     'email'        => $config['support_email'] ?? 'support@example.com',
