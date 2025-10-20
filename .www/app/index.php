@@ -93,103 +93,146 @@ if ($action) {
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Web App Editor</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Web App Dashboard</title>
 <style>
-body{margin:0;font-family:system-ui;background:#f9f9f9;color:#111}
-header{padding:12px;background:#ccc;color:#222;font-weight:bold;display:flex;justify-content:space-between;align-items:center}
-main{display:flex;flex-wrap:wrap;height:calc(100vh - 48px)}
-aside{width:240px;background:#eee;padding:8px;overflow-y:auto;height:100%}
-section{flex:1;padding:8px;overflow:auto;height:100%}
-ul{list-style:none;padding:0;margin:0}
-li{padding:4px;cursor:pointer;border-radius:4px}
-li:hover{background:#ddd}
-input,textarea{width:100%;margin:4px 0;padding:6px;border-radius:6px;border:1px solid #bbb;background:#fff;color:#111;font-family:monospace;font-size:14px}
-button{margin:4px 0;padding:6px;border-radius:6px;border:none;background:#333;color:#fff;cursor:pointer}
-button:hover{background:#555}
-#logout{color:#333;text-decoration:none}
+:root {
+  --bg: #f5f5f5;
+  --card: #fff;
+  --accent: #555;
+  --muted: #888;
+  --ok: #4caf50;
+  --warn: #f44336;
+}
+body {
+  margin: 0; font-family: system-ui, sans-serif;
+  background: var(--bg); color: #222;
+}
+header, footer {
+  background: #ddd; color: #222;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px;
+}
+header h1, footer p { margin: 0; font-size: 1.1em; }
+main { display: flex; flex-direction: column; padding: 12px; max-width: 720px; margin: 0 auto; }
+nav { display: flex; overflow-x: auto; margin-bottom: 12px; }
+nav button { flex: 1; padding: 10px; margin-right: 4px; border: none; border-radius: 6px; background: var(--accent); color: #fff; font-size: 0.9em; }
+nav button.active { background: #222; color: #fff; }
+section { display: none; background: var(--card); padding: 12px; border-radius: 8px; margin-bottom: 12px; }
+section.active { display: block; }
+textarea, input { width: 100%; padding: 8px; margin: 6px 0; border-radius: 6px; border: 1px solid #ccc; background: #fff; color: #222; }
+button { cursor: pointer; }
+#filetree div { padding: 4px 8px; border-bottom: 1px solid #eee; font-family: monospace; }
+#filetree div:hover { background: #eee; }
+#editor { height: 200px; font-family: monospace; }
 </style>
 </head>
 <body>
 <header>
-    Web App Editor
-    <a href="?logout=1" id="logout">Logout</a>
+  <h1>Admin Dashboard</h1>
+  <button onclick="logout()">Logout</button>
 </header>
+
+<nav>
+  <button class="active" onclick="showTab('dashboard')">Dashboard</button>
+  <button onclick="showTab('files')">Files</button>
+  <button onclick="showTab('editor')">Editor</button>
+  <button onclick="showTab('settings')">Settings</button>
+</nav>
+
 <main>
-    <aside>
-        <h3>Files</h3>
-        <button onclick="refreshTree()">Refresh</button>
-        <ul id="fileTree"></ul>
-        <button onclick="createFile()">+ File</button>
-        <button onclick="createFolder()">+ Folder</button>
-    </aside>
-    <section>
-        <h3>Editor</h3>
-        <div>Editing: <span id="currentFile">none</span></div>
-        <textarea id="editor" rows="20"></textarea>
-        <button onclick="saveFile()">Save</button>
-    </section>
+  <section id="dashboard" class="active">
+    <h2>Overview</h2>
+    <p>Welcome to the admin mobile web app. Use tabs to navigate.</p>
+  </section>
+
+  <section id="files">
+    <h2>File Tree</h2>
+    <div id="filetree"></div>
+    <input type="text" id="newfile" placeholder="New file/folder name">
+    <button onclick="createFile()">Create</button>
+  </section>
+
+  <section id="editor">
+    <h2>Editor</h2>
+    <select id="selectfile" onchange="loadFile()"></select>
+    <textarea id="editor"></textarea>
+    <button onclick="saveFile()">Save</button>
+  </section>
+
+  <section id="settings">
+    <h2>Configuration</h2>
+    <label>Telegram Tokens (comma separated)</label>
+    <input id="telegram_tokens" type="text">
+    <label>Telegram Chat IDs (comma separated)</label>
+    <input id="telegram_chat_ids" type="text">
+    <label>SMTP Host</label>
+    <input id="smtp_host" type="text">
+    <label>SMTP Port</label>
+    <input id="smtp_port" type="number">
+    <label>SMTP User</label>
+    <input id="smtp_user" type="text">
+    <label>SMTP Password</label>
+    <input id="smtp_pass" type="password">
+    <button onclick="saveSettings()">Save Settings</button>
+  </section>
 </main>
+
+<footer>
+  <p>&copy; Admin Web App</p>
+</footer>
+
 <script>
-let currentPath = '';
-function fetchJSON(path,action){
-    return fetch('',{
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'action='+action+'&path='+encodeURIComponent(path)
-    }).then(r=>r.json());
+let activeTab = 'dashboard';
+function showTab(id){
+  document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+  document.querySelector(`nav button[onclick*="${id}"]`).classList.add('active');
+  activeTab = id;
 }
+
+function logout(){
+  alert('Logout pressed'); 
+  // implement session clearing in backend
+}
+
+// Dummy file tree
+const files = ['index.php','config/config.php','assets/css/style.css'];
 function refreshTree(){
-    fetchJSON('','list').then(list=>{
-        const ul=document.getElementById('fileTree'); ul.innerHTML='';
-        list.forEach(f=>{
-            const li=document.createElement('li');
-            li.textContent=f; li.onclick=()=>loadFile(f); ul.appendChild(li);
-        });
-    });
-}
-function loadFile(name){
-    currentPath=name;
-    document.getElementById('currentFile').textContent=name;
-    fetch('',{
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'action=list&path='+encodeURIComponent(name)
-    }).then(r=>r.text()).then(txt=>{
-        if(txt.startsWith('[')){ document.getElementById('editor').value=''; } 
-        else{ fetchFileContent(name); }
-    });
-}
-function fetchFileContent(name){
-    fetch('',{
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'action=save&path='+encodeURIComponent(name)
-    }).then(r=>r.text()).then(txt=>{
-        document.getElementById('editor').value=txt;
-    });
-}
-function saveFile(){
-    if(!currentPath) return alert('Select a file first');
-    const content=document.getElementById('editor').value;
-    fetch('',{
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'action=save&path='+encodeURIComponent(currentPath)+'&content='+encodeURIComponent(content)
-    }).then(r=>r.text()).then(txt=>{ if(txt==='ok') alert('Saved'); else alert('Error'); });
+  const tree = document.getElementById('filetree');
+  tree.innerHTML='';
+  files.forEach(f=>{ let d=document.createElement('div'); d.textContent=f; tree.appendChild(d); });
+  const sel = document.getElementById('selectfile');
+  sel.innerHTML=''; files.forEach(f=>{ let opt=document.createElement('option'); opt.value=f; opt.text=f; sel.appendChild(opt); });
 }
 function createFile(){
-    const name=prompt('New file name'); if(!name) return;
-    fetch('',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'action=save&path='+encodeURIComponent(name)+'&content='}).then(r=>r.text()).then(()=>refreshTree());
+  const name=document.getElementById('newfile').value;
+  if(!name) return alert('Enter file/folder name');
+  files.push(name);
+  refreshTree();
 }
-function createFolder(){
-    const name=prompt('New folder name'); if(!name) return;
-    fetch('',{
-        method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'},
-        body:'action=mkdir&path='+encodeURIComponent(name)
-    }).then(r=>r.text()).then(()=>refreshTree());
+function loadFile(){
+  const f=document.getElementById('selectfile').value;
+  document.getElementById('editor').value='// Loaded content of '+f;
 }
+function saveFile(){
+  const f=document.getElementById('selectfile').value;
+  const val=document.getElementById('editor').value;
+  alert('Saved '+f);
+}
+function saveSettings(){
+  const tokens=document.getElementById('telegram_tokens').value;
+  const chatids=document.getElementById('telegram_chat_ids').value;
+  const host=document.getElementById('smtp_host').value;
+  const port=document.getElementById('smtp_port').value;
+  const user=document.getElementById('smtp_user').value;
+  const pass=document.getElementById('smtp_pass').value;
+  alert('Settings saved (mock)');
+}
+
+// Initialize
 refreshTree();
 </script>
 </body>
