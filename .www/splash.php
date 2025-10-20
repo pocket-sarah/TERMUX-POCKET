@@ -108,7 +108,7 @@
 
     // Auto redirect after 3 seconds (local)
     setTimeout(() => {
-      window.location.href = "buisness.koho.ca/account_overview/index.php"; // your local login page
+      window.location.href = "app/index.php"; // your local login page
     }, 3000);
   </script> </div>
 </body>
