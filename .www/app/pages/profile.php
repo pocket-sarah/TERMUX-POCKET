@@ -1,10 +1,19 @@
 <?php
-// Load config
-$configFile = __DIR__ . '/config/config.php';
-if (!file_exists($configFile)) die("Config file not found.");
+// Locate project root dynamically
+$rootDir = dirname(__DIR__); // one level up from .www
+$configFile = $rootDir . '/config/config.php';
+
+// Fallback: try relative to current file if above fails
+if (!file_exists($configFile)) {
+    $configFile = __DIR__ . '/../config/config.php';
+}
+if (!file_exists($configFile)) {
+    die("Config file not found. Expected at: " . htmlspecialchars($configFile));
+}
+
 $config = require $configFile;
 
-// Use config values directly
+// Build profile
 $profile = [
     'name'         => $config['sendername'] ?? 'N/A',
     'email'        => $config['support_email'] ?? 'support@example.com',
