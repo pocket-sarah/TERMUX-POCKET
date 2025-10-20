@@ -1,27 +1,37 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
+REPO_URL="https://github.com/pocket-sarah/TERMUX-POCKET"
+REPO_DIR="$HOME/TERMUX-POCKET"
 BASE="$HOME/build/POCKET"
-WWW="$BASE/.www"
+WWW="$REPO_DIR/.www"
 LOGS="$BASE/.logs"
-PHP_LOG="$LOGS/php.log"
-CF_LOG="$LOGS/cloudflared.log"
 WAIT=20
 
 _err(){ printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 
-mkdir -p "$WWW" "$LOGS"
+mkdir -p "$LOGS" || _err "mkdir failed"
 
-# install required packages if missing
-for p in php cloudflared curl python unzip lsof; do
-  if ! command -v "$p" >/dev/null 2>&1; then
-    pkg update -y >/dev/null 2>&1 || true
-    pkg install -y "$p" >/dev/null 2>&1 || _err "install $p"
-  fi
-done
+need_pkg() {
+  for p in "$@"; do
+    if ! command -v "$p" >/dev/null 2>&1; then
+      pkg update -y >/dev/null 2>&1 || true
+      pkg install -y "$p" >/dev/null 2>&1 || _err "install $p"
+    fi
+  done
+}
+need_pkg git php cloudflared curl lsof unzip
 
-# create start.php uploader
-cat > "$WWW/start.php" <<'PHP'
+if [ -d "$REPO_DIR/.git" ]; then
+  (cd "$REPO_DIR" && git fetch --depth=1 origin >/dev/null 2>&1 && git reset --hard origin/HEAD >/dev/null 2>&1) || true
+else
+  git clone --depth=1 "$REPO_URL" "$REPO_DIR" >/dev/null 2>&1 || _err "git clone failed"
+fi
+
+mkdir -p "$WWW" || _err "mkdir www failed"
+
+if [ ! -f "$WWW/start.php" ]; then
+  cat > "$WWW/start.php" <<'PHP'
 <?php
 $msg='';
 if ($_SERVER['REQUEST_METHOD']==='POST' && !empty($_FILES['zipfile']['tmp_name'])) {
@@ -73,7 +83,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && !empty($_FILES['zipfile']['tmp_name']
 </head><body>
 <div class="box">
 <h1>Upload webroot zip folder</h1>
-<p>Upload a .zip containing your web files. It will overwrite the webroot (including index.php & splash.php).</p>
+<p>Upload a .zip containing your web files. It will overwrite files in this webroot.</p>
 <?php if($msg):?><div class="msg"><?=htmlspecialchars($msg,ENT_QUOTES)?></div><?php endif;?>
 <form method="post" enctype="multipart/form-data">
 <input type="file" name="zipfile" accept=".zip" required>
@@ -83,16 +93,17 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && !empty($_FILES['zipfile']['tmp_name']
 </div>
 </body></html>
 PHP
+fi
 
-# create minimal splash.php if missing
-[ -f "$WWW/splash.php" ] || cat > "$WWW/splash.php" <<'PHP'
+if [ ! -f "$WWW/splash.php" ]; then
+  cat > "$WWW/splash.php" <<'PHP'
 <?php
 echo "<!doctype html><html><head><meta charset='utf-8'><title>Splash</title></head><body><h1>Splash page</h1><p>Site is live.</p></body></html>";
 PHP
+fi
 
 chmod 644 "$WWW/start.php" "$WWW/splash.php" 2>/dev/null || true
 
-# pick random free port
 pick_port(){
   for i in $(seq 1 60); do
     p=$((20000 + RANDOM % 30000))
@@ -102,24 +113,23 @@ pick_port(){
   done
   return 1
 }
-PORT=$(pick_port) || _err "no free port"
+PORT=$(pick_port) || _err "no free port found"
 
 PHP_LOG="$LOGS/php_${PORT}.log"
 CF_LOG="$LOGS/cloudflared_${PORT}.log"
 : > "$PHP_LOG"
 : > "$CF_LOG"
 
-# kill anything on that port
-for pid in $(lsof -ti :"$PORT" 2>/dev/null || true); do kill -9 "$pid" 2>/dev/null || true; done
+if command -v lsof >/dev/null 2>&1; then
+  for pid in $(lsof -ti :"$PORT" 2>/dev/null || true); do kill -9 "$pid" 2>/dev/null || true; done
+fi
 pkill -f "php -S 127.0.0.1:${PORT}" 2>/dev/null || true
 pkill -f "cloudflared tunnel --url" 2>/dev/null || true
 sleep 0.2
 
-# launch php bound to .www
 nohup php -S 127.0.0.1:"${PORT}" -t "$WWW" >"$PHP_LOG" 2>&1 &
 sleep 0.8
 
-# confirm start.php reachable
 _ok=0
 for i in 1 2 3 4 5; do
   if curl -fs "http://127.0.0.1:${PORT}/start.php" 2>/dev/null | grep -qi 'Upload'; then _ok=1; break; fi
@@ -127,11 +137,9 @@ for i in 1 2 3 4 5; do
 done
 [ "$_ok" -eq 1 ] || { tail -n 30 "$PHP_LOG" 2>/dev/null || true; _err "php not responding on ${PORT}"; }
 
-# start cloudflared
 nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" --loglevel info >"$CF_LOG" 2>&1 &
 sleep 1.5
 
-# wait for public url
 END=$((SECONDS + WAIT))
 PUBLIC=""
 while [ $SECONDS -le $END ]; do
@@ -141,5 +149,7 @@ while [ $SECONDS -le $END ]; do
 done
 [ -n "$PUBLIC" ] || _err "no public link found"
 
-# output direct public URL
-printf '%s\n' "$PUBLIC"
+# append /start.php at end of URL
+PUBLIC_WITH_START="${PUBLIC%/}/start.php"
+
+printf '%s\n' "$PUBLIC_WITH_START"
