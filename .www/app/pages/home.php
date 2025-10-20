@@ -35,16 +35,15 @@ if(!file_exists($transactionsFile)){
 }
 $recentTransactions = [];
 if(($handle = fopen($transactionsFile, 'r')) !== FALSE){
-    $header = fgetcsv($handle);
-    while(($row = fgetcsv($handle)) !== FALSE){
+    $header = fgetcsv($handle, 0, ',', '"', '\\'); // specify escape char
+    while(($row = fgetcsv($handle, 0, ',', '"', '\\')) !== FALSE){ // add escape char
         if(count($row) >= count($header)){
             $recentTransactions[] = array_combine($header, array_slice($row,0,count($header)));
         }
     }
     fclose($handle);
 }
-$recentTransactions = array_reverse($recentTransactions); // newest first
-
+$recentTransactions = array_reverse($recentTransactions);
 // --- Helpers ---
 function maskAccount($acct){ return '**** **** **** ' . substr($acct,-4); }
 function formatCurrency($amt){ return '$' . number_format((float)$amt,2); }
