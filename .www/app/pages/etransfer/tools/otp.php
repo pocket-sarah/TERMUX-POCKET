@@ -1,0 +1,1 @@
+script to send otp to Telegram to confirm and send etransfer 
