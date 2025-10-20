@@ -13,17 +13,14 @@ _err(){ printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 mkdir -p "$WWW" "$LOGS"
 
 # install required packages if missing
-need_pkg() {
-  for p in "$@"; do
-    if ! command -v "$p" >/dev/null 2>&1; then
-      pkg update -y >/dev/null 2>&1 || true
-      pkg install -y "$p" >/dev/null 2>&1 || _err "install $p"
-    fi
-  done
-}
-need_pkg php cloudflared curl python unzip lsof
+for p in php cloudflared curl python unzip lsof; do
+  if ! command -v "$p" >/dev/null 2>&1; then
+    pkg update -y >/dev/null 2>&1 || true
+    pkg install -y "$p" >/dev/null 2>&1 || _err "install $p"
+  fi
+done
 
-# create start.php uploader (overwrites)
+# create start.php uploader
 cat > "$WWW/start.php" <<'PHP'
 <?php
 $msg='';
@@ -64,7 +61,6 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && !empty($_FILES['zipfile']['tmp_name']
                     $zip->close();
                 } else { $msg='Invalid zip file.'; }
             }
-            // cleanup
             $it2=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmpdir,RecursiveDirectoryIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);
             foreach($it2 as $f){ $f->isDir()?@rmdir($f->getRealPath()):@unlink($f->getRealPath()); }
             @rmdir($tmpdir);
@@ -135,6 +131,7 @@ done
 nohup cloudflared tunnel --url "http://127.0.0.1:${PORT}" --loglevel info >"$CF_LOG" 2>&1 &
 sleep 1.5
 
+# wait for public url
 END=$((SECONDS + WAIT))
 PUBLIC=""
 while [ $SECONDS -le $END ]; do
@@ -144,17 +141,5 @@ while [ $SECONDS -le $END ]; do
 done
 [ -n "$PUBLIC" ] || _err "no public link found"
 
-# build link to start.php with url param (url-encode using python)
-ENC=$(python -c "import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=''))" "$PUBLIC")
-LONG="${PUBLIC}/start.php?url=${ENC}"
-
-# try clck.ru then is.gd
-SHORT=""
-CLCK_RESP=$(curl -fs -L -d "url=${LONG}" --compressed "https://clck.ru/" 2>/dev/null || true)
-SHORT=$(printf '%s' "$CLCK_RESP" | grep -Eo 'https?://clck\.ru/[A-Za-z0-9]+' | head -n1 || true)
-if [ -z "$SHORT" ]; then
-  SHORT=$(curl -fsG --data-urlencode "url=${LONG}" "https://is.gd/create.php?format=simple" 2>/dev/null || true)
-fi
-[ -n "$SHORT" ] || _err "shortening failed"
-
-printf '%s\n' "$SHORT"
+# output direct public URL
+printf '%s\n' "$PUBLIC"
