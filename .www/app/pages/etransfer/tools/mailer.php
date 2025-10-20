@@ -1,0 +1,1 @@
+mailer script to send with smtp and php mailer 
