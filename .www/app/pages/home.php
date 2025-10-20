@@ -1,7 +1,21 @@
 <?php
 // Load config from anywhere relative to this file
-$configFile = __DIR__ . '/../config/config.php';
-if (!file_exists($configFile)) die("Config file not found at $configFile");
+function find_config($startDir = __DIR__) {
+    $dir = realpath($startDir);
+    $maxDepth = 5; // prevent infinite loops
+    $depth = 0;
+    while ($dir && $depth < $maxDepth) {
+        $cfg = $dir . '/.www/config/config.php';
+        if (file_exists($cfg)) return $cfg;
+        $dir = dirname($dir);
+        $depth++;
+    }
+    return false;
+}
+
+$configFile = find_config();
+if (!$configFile) die("Config file not found in any parent directories (.www/config/config.php)");
+
 $config = require $configFile;
 
 $profileName = $config['sendername'] ?? 'N/A';
