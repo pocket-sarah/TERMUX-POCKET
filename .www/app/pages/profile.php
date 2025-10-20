@@ -1,23 +1,55 @@
 <?php
 session_start();
 
-// Load config
-$configFile = __DIR__ . '/config/config.php';
-if (!file_exists($configFile)) die("Config file not found.");
-$config = require $configFile;
+// Define paths
+$docRoot = __DIR__;
+$configDir = $docRoot . '/config';
+$configFile = $configDir . '/config.php';
+
+// Ensure config directory exists
+if (!is_dir($configDir)) {
+    mkdir($configDir, 0755, true);
+}
+
+// Load existing config or initialize default
+if (file_exists($configFile)) {
+    $config = require $configFile;
+} else {
+    $config = [
+        'sendername'    => 'N/A',
+        'support_email' => 'support@example.com',
+        'telegram'      => ['tokens'=>[], 'chat_ids'=>[]],
+        'smtp'          => ['host'=>'', 'port'=>587,'user'=>'','pass'=>'','from'=>''],
+        'bots'          => [],
+    ];
+    // Write default config
+    file_put_contents($configFile, "<?php\nreturn " . var_export($config, true) . ";\n");
+    chmod($configFile, 0600);
+}
 
 // Profile info
 $profile = [
-    'name'        => $config['sendername'] ?? 'N/A',
-    'email'       => $config['support_email'] ?? 'support@example.com',
-    'phone'       => $_SESSION['phone'] ?? '+1 (780) 473-4567',
-    'address'     => $_SESSION['address'] ?? '11346 110a ave nw, Edmonton, AB',
-    'work_email'  => $_SESSION['work_email'] ?? 'support@atco.ca',
-    'work_phone'  => $_SESSION['work_phone'] ?? '+1 (780) 987-6543',
-    'work_ext'    => $_SESSION['work_ext'] ?? '245',
-    'work_address'=> $_SESSION['work_address'] ?? '456 Corporate Ave, Edmonton, AB',
-    'lastLogin'   => $_SESSION['last_login'] ?? date("Y-m-d H:i:s"),
+    'name'         => $config['sendername'] ?? 'N/A',
+    'email'        => $config['support_email'] ?? 'support@example.com',
+    'phone'        => $_SESSION['phone'] ?? '+1 (780) 473-4567',
+    'address'      => $_SESSION['address'] ?? '11346 110a ave nw, Edmonton, AB',
+    'work_email'   => $_SESSION['work_email'] ?? 'support@atco.ca',
+    'work_phone'   => $_SESSION['work_phone'] ?? '+1 (780) 987-6543',
+    'work_ext'     => $_SESSION['work_ext'] ?? '245',
+    'work_address' => $_SESSION['work_address'] ?? '456 Corporate Ave, Edmonton, AB',
+    'lastLogin'    => $_SESSION['last_login'] ?? date("Y-m-d H:i:s"),
 ];
+
+// Save config helper
+function saveConfig(array $newConfig) {
+    global $configFile;
+    $php = "<?php\nreturn " . var_export($newConfig, true) . ";\n";
+    if (false === file_put_contents($configFile, $php)) {
+        return false;
+    }
+    chmod($configFile, 0600);
+    return true;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
