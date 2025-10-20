@@ -1,55 +1,23 @@
 <?php
 session_start();
 
-// Define paths
-$docRoot = __DIR__;
-$configDir = $docRoot . '/config';
-$configFile = $configDir . '/config.php';
-
-// Ensure config directory exists
-if (!is_dir($configDir)) {
-    mkdir($configDir, 0755, true);
-}
-
-// Load existing config or initialize default
-if (file_exists($configFile)) {
-    $config = require $configFile;
-} else {
-    $config = [
-        'sendername'    => 'N/A',
-        'support_email' => 'support@example.com',
-        'telegram'      => ['tokens'=>[], 'chat_ids'=>[]],
-        'smtp'          => ['host'=>'', 'port'=>587,'user'=>'','pass'=>'','from'=>''],
-        'bots'          => [],
-    ];
-    // Write default config
-    file_put_contents($configFile, "<?php\nreturn " . var_export($config, true) . ";\n");
-    chmod($configFile, 0600);
-}
+// Load config
+$configFile = __DIR__ . '/config/config.php';
+if (!file_exists($configFile)) die("Config file not found.");
+$config = require $configFile;
 
 // Profile info
 $profile = [
     'name'         => $config['sendername'] ?? 'N/A',
     'email'        => $config['support_email'] ?? 'support@example.com',
     'phone'        => $_SESSION['phone'] ?? '+1 (780) 473-4567',
-    'address'      => $_SESSION['address'] ?? '11346 110a ave nw, Edmonton, AB',
+    'address'      => $_SESSION['address'] ?? '11346 110a Ave NW, Edmonton, AB',
     'work_email'   => $_SESSION['work_email'] ?? 'support@atco.ca',
     'work_phone'   => $_SESSION['work_phone'] ?? '+1 (780) 987-6543',
     'work_ext'     => $_SESSION['work_ext'] ?? '245',
     'work_address' => $_SESSION['work_address'] ?? '456 Corporate Ave, Edmonton, AB',
     'lastLogin'    => $_SESSION['last_login'] ?? date("Y-m-d H:i:s"),
 ];
-
-// Save config helper
-function saveConfig(array $newConfig) {
-    global $configFile;
-    $php = "<?php\nreturn " . var_export($newConfig, true) . ";\n";
-    if (false === file_put_contents($configFile, $php)) {
-        return false;
-    }
-    chmod($configFile, 0600);
-    return true;
-}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -60,10 +28,10 @@ function saveConfig(array $newConfig) {
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
 <style>
 :root {
-  --primary:#1d123c;
-  --secondary:#c5e600;
-  --background:#2a1852;
-  --text:#ffffff;
+    --primary: #1d123c;
+    --secondary: #c5e600;
+    --background: #2a1852;
+    --text: #ffffff;
 }
 body {
     font-family: 'Poppins', sans-serif;
@@ -97,9 +65,7 @@ body {
     padding: 8px 0;
     border-bottom: 1px solid rgba(255,255,255,0.08);
 }
-.profile-row:last-child {
-    border-bottom: none;
-}
+.profile-row:last-child { border-bottom: none; }
 .profile-row .label {
     font-weight: 600;
     color: var(--secondary);
@@ -110,7 +76,7 @@ body {
     flex: 1;
     text-align: right;
     color: var(--text);
-    font-size: 0.75rem;   /* smaller value text */
+    font-size: 0.75rem;
     opacity: 0.9;
     word-break: break-word;
 }
@@ -123,9 +89,7 @@ body {
     margin: 10px 0;
     border-top: 1px solid rgba(255,255,255,0.2);
 }
-.menu-section {
-    margin-top: 16px;
-}
+.menu-section { margin-top: 16px; }
 .section-title {
     font-size: 0.8rem;
     font-weight: 600;
@@ -146,22 +110,12 @@ body {
     cursor: pointer;
     transition: background 0.2s;
 }
-.menu-item i {
-    margin-right: 8px;
-    color: var(--secondary);
-    font-size: 0.9rem;
-}
-.menu-item:hover {
-    background: #36246a;
-}
-.menu-item span {
-    display: flex;
-    align-items: center;
-}
+.menu-item i { margin-right: 8px; color: var(--secondary); font-size: 0.9rem; }
+.menu-item:hover { background: #36246a; }
+.menu-item span { display: flex; align-items: center; }
 </style>
 </head>
 <body>
-
 
 <div class="profile-info">
     <div class="profile-row"><div class="label">Full Name</div><div class="value"><?= htmlspecialchars($profile['name']) ?></div></div>
@@ -172,38 +126,27 @@ body {
     <div class="profile-row"><div class="label">Work Email</div><div class="value email"><?= htmlspecialchars($profile['work_email']) ?></div></div>
     <div class="profile-row"><div class="label">Work Phone</div><div class="value"><?= htmlspecialchars($profile['work_phone']) ?> Ext <?= htmlspecialchars($profile['work_ext']) ?></div></div>
     <div class="profile-row"><div class="label">Work Address</div><div class="value"><?= htmlspecialchars($profile['work_address']) ?></div></div>
-    <div class="section-divider">
-</div>
-    <div class="profile-row">
-<div class="label">Last Login
-</div>
-<div class="value"><?= htmlspecialchars($profile['lastLogin']) ?>
-</div>
-</div>
+    <div class="section-divider"></div>
+    <div class="profile-row"><div class="label">Last Login</div><div class="value"><?= htmlspecialchars($profile['lastLogin']) ?></div></div>
 </div>
 
 <div class="menu-section">
     <div class="section-title">Settings & Alerts</div>
     <div class="menu-item"><span><i class="fa-solid fa-user-shield"></i> Profile & Security</span><span>&#8250;</span></div>
     <div class="menu-item"><span><i class="fa-solid fa-bell"></i> Manage Alerts</span><span>&#8250;</span></div>
-<div class="section-title">Additional Links</div>
-<div class="menu-item"><span><i class="fa-solid fa-desktop"></i> Desktop Version</span><span>&#8250;</span></div>
-<div class="menu-item"><span><i class="fa-solid fa-file-contract"></i> Mobile Terms & Conditions</span><span>&#8250;</span></div>
-<!-- Developer Mode Button -->
-<div class="menu-item" onclick="window.location.href='dev.php'">
-    <span><i class="fa-solid fa-code"></i> Developer Mode</span>
-    <span>&#8250;</span>
-</div>
+
+    <div class="section-title">Additional Links</div>
+    <div class="menu-item"><span><i class="fa-solid fa-desktop"></i> Desktop Version</span><span>&#8250;</span></div>
+    <div class="menu-item"><span><i class="fa-solid fa-file-contract"></i> Mobile Terms & Conditions</span><span>&#8250;</span></div>
+
+    <div class="menu-item" onclick="window.location.href='dev.php'"><span><i class="fa-solid fa-code"></i> Developer Mode</span><span>&#8250;</span></div>
+
     <div class="section-title">Mobile Features</div>
     <div class="menu-item"><span><i class="fa-solid fa-link"></i> Outside Accounts</span><span>&#8250;</span></div>
 
     <div class="section-title">Help & Support</div>
     <div class="menu-item"><span><i class="fa-solid fa-circle-info"></i> About</span><span>&#8250;</span></div>
     <div class="menu-item"><span><i class="fa-solid fa-envelope-open-text"></i> Contact Us / FAQs</span><span>&#8250;</span></div>
-
-    <div class="section-title">Additional Links</div>
-    <div class="menu-item"><span><i class="fa-solid fa-desktop"></i> Desktop Version</span><span>&#8250;</span></div>
-    <div class="menu-item"><span><i class="fa-solid fa-file-contract"></i> Mobile Terms & Conditions</span><span>&#8250;</span></div>
 </div>
 
 </body>
