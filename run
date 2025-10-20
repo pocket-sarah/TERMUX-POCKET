@@ -1,0 +1,179 @@
+#!/data/data/com.termux/files/usr/bin/bash
+set -euo pipefail
+shopt -s nullglob
+
+# run.sh - Termux-friendly launcher that forces .www (next to this script) as PHP webroot.
+# - skips `ss` requirement (uses lsof if present)
+# - optional cloudflared tunnel with graceful local fallback
+# - exports WEBROOT / DOCUMENT_ROOT / CONFIG_PATH for PHP apps
+# Usage: ./run.sh [--no-cloudflared] [--wait N] [--debug]
+
+NO_CLOUDFLARED=0
+WAIT=20
+DEBUG=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-cloudflared) NO_CLOUDFLARED=1; shift;;
+    --wait) WAIT="$2"; shift 2;;
+    --debug) DEBUG=1; shift;;
+    -h|--help) printf "Usage: %s [--no-cloudflared] [--wait N] [--debug]\n" "$0"; exit 0;;
+    *) printf 'Unknown arg: %s\n' "$1" >&2; exit 1;;
+  esac
+done
+
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+WWW="$SCRIPT_DIR/.www"
+LOGS="$SCRIPT_DIR/.logs"
+RUN_ID="$(date +%s)_$$"
+PHP_LOG="$LOGS/php_${RUN_ID}.log"
+CF_LOG="$LOGS/cloudflared_${RUN_ID}.log"
+
+mkdir -p "$LOGS"
+: > "$PHP_LOG" : > "$CF_LOG"
+
+_err(){ printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+_info(){ printf '%s\n' "$1"; }
+
+# required binaries
+command -v php >/dev/null 2>&1 || _err "php not found. Install php in Termux (pkg install php)."
+command -v curl >/dev/null 2>&1 || _err "curl not found. Install curl (pkg install curl)."
+CLOUDFLARED_BIN="$(command -v cloudflared || true)"
+LOSF_BIN="$(command -v lsof || true)"
+
+# enforce .www next to script
+[ -d "$WWW" ] || _err ".www not found next to script ($SCRIPT_DIR). Place your web app files in $WWW"
+[ -f "$WWW/index.php" ] || [ -f "$WWW/tools.php" ] || _err "No index.php or tools.php in $WWW"
+
+# pick a free port using lsof when available, otherwise optimistic pick
+pick_port(){
+  for i in $(seq 1 120); do
+    p=$((20000 + RANDOM % 30000))
+    if [ -n "$LOSF_BIN" ]; then
+      # lsof returns non-zero if port isn't used
+      lsof -ti :"$p" >/dev/null 2>&1 || { printf '%s' "$p"; return 0; }
+    else
+      # no lsof available. assume port free.
+      printf '%s' "$p"; return 0
+    fi
+  done
+  return 1
+}
+PORT="$(pick_port)" || _err "no free port found"
+
+# kill previous listeners on that port quietly
+if [ -n "$LOSF_BIN" ]; then
+  for pid in $(lsof -ti :"$PORT" 2>/dev/null || true); do kill -9 "$pid" 2>/dev/null || true; done
+fi
+pkill -f "php -S 127.0.0.1:${PORT}" 2>/dev/null || true
+pkill -f "cloudflared tunnel --url" 2>/dev/null || true
+sleep 0.15
+
+# router that forces DOCUMENT_ROOT/WEBROOT and sets CONFIG_PATH if present
+ROUTER="$LOGS/.php_router_${RUN_ID}.php"
+cat > "$ROUTER" <<'PHP_ROUTER'
+<?php
+// generated router: enforces DOCUMENT_ROOT and WEBROOT for included apps
+$webroot = getenv('WEBROOT') ?: (isset($argv[1]) ? $argv[1] : __DIR__ . '/../.www');
+$docroot = realpath($webroot) ?: $webroot;
+$_SERVER['DOCUMENT_ROOT'] = $docroot;
+putenv('DOCUMENT_ROOT=' . $docroot);
+putenv('WEBROOT=' . $docroot);
+// auto-config path under webroot
+$maybe = $docroot . '/config/config.php';
+if (file_exists($maybe) && !getenv('CONFIG_PATH')) {
+    putenv('CONFIG_PATH=' . $maybe);
+}
+$uri = urldecode(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
+$requested = $docroot . $uri;
+// serve static files directly
+if ($uri !== '/' && file_exists($requested) && is_file($requested)) {
+    return false;
+}
+// prefer tools.php then index.php
+$candidates = [$docroot . '/tools.php', $docroot . '/index.php'];
+foreach ($candidates as $c) {
+    if (file_exists($c)) {
+        chdir(dirname($c));
+        require $c;
+        exit;
+    }
+}
+http_response_code(404);
+header('Content-Type: text/plain; charset=utf-8');
+echo "No entrypoint found in webroot: $docroot\n";
+PHP_ROUTER
+
+# export envs for PHP processes
+export WEBROOT="$WWW"
+if [ -f "$WWW/config/config.php" ]; then export CONFIG_PATH="$WWW/config/config.php"; fi
+export DOCUMENT_ROOT="$WWW"
+
+# start PHP built-in server with router and explicit -t
+_info "Starting PHP built-in server on 127.0.0.1:${PORT} (webroot: ${WWW})"
+nohup php -S 127.0.0.1:"${PORT}" "$ROUTER" -t "$WWW" >"$PHP_LOG" 2>&1 &
+PHP_PID=$!
+
+# cleanup function
+_cleanup(){
+  _info "Shutting down..."
+  kill "$PHP_PID" 2>/dev/null || true
+  [ -n "${CF_PID:-}" ] && kill "$CF_PID" 2>/dev/null || true
+  rm -f "$ROUTER"
+  exit 0
+}
+trap _cleanup INT TERM EXIT
+
+# verify php server responded
+END_CHECK=$((SECONDS + 10))
+_started=0
+while [ $SECONDS -le $END_CHECK ]; do
+  if curl -fs "http://127.0.0.1:${PORT}/tools.php" >/dev/null 2>&1 || curl -fs "http://127.0.0.1:${PORT}/index.php" >/dev/null 2>&1; then
+    _started=1; break
+  fi
+  sleep 0.3
+done
+[ "$_started" -eq 1 ] || { tail -n 200 "$PHP_LOG" 2>/dev/null || true; _err "PHP not responding on ${PORT}. See $PHP_LOG"; }
+
+# start cloudflared tunnel optionally
+PUBLIC_URL=""
+if [ "$NO_CLOUDFLARED" -eq 0 ] && [ -n "$CLOUDFLARED_BIN" ]; then
+  _info "Starting cloudflared tunnel..."
+  nohup "$CLOUDFLARED_BIN" tunnel --url "http://127.0.0.1:${PORT}" --loglevel info >"$CF_LOG" 2>&1 &
+  CF_PID=$!
+  # wait for trycloudflare URL
+  END=$((SECONDS + WAIT))
+  while [ $SECONDS -le $END ]; do
+    PUBLIC_URL="$(grep -Eo 'https?://[a-z0-9-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -n1 || true)"
+    [ -n "$PUBLIC_URL" ] && break
+    sleep 1
+  done
+  if [ -z "$PUBLIC_URL" ]; then
+    _info "No public URL from cloudflared within ${WAIT}s. Falling back to local URL."
+  fi
+else
+  if [ "$NO_CLOUDFLARED" -eq 1 ]; then _info "Cloudflared disabled by user (--no-cloudflared)."; fi
+  if [ -z "$CLOUDFLARED_BIN" ]; then _info "cloudflared not installed. Using local URL."; fi
+fi
+
+# print resulting URL (prefer public)
+ENTRY_FILE=$( [ -f "$WWW/tools.php" ] && echo "tools.php" || echo "index.php" )
+if [ -n "$PUBLIC_URL" ]; then
+  printf '%s\n' "${PUBLIC_URL%/}/$ENTRY_FILE"
+else
+  _info "Local server URL:"
+  printf 'http://127.0.0.1:%s/%s\n' "$PORT" "$ENTRY_FILE"
+fi
+
+[ "$DEBUG" -eq 1 ] && {
+  _info "DEBUG: SCRIPT_DIR=$SCRIPT_DIR"
+  _info "DEBUG: WEBROOT=$WEBROOT"
+  _info "DEBUG: CONFIG_PATH=${CONFIG_PATH:-<unset>}"
+  _info "DEBUG: PORT=$PORT"
+  _info "DEBUG: PHP_PID=$PHP_PID"
+  _info "DEBUG: PHP_LOG=$PHP_LOG"
+  _info "DEBUG: CF_LOG=$CF_LOG"
+}
+
+# keep script running to maintain trap and allow ctrl-c
+wait "$PHP_PID" 2>/dev/null || true
