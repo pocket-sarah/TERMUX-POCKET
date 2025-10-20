@@ -9,7 +9,24 @@ LOGS="$BASE/.logs"
 PHP_LOG="$LOGS/php_${PORT}.log"
 CLOUDFLARED_LOG="$LOGS/cloudflared_${PORT}.log"
 
+# ensure dirs
 mkdir -p "$WWW" "$LOGS"
+
+# create minimal index.php if missing
+if [ ! -f "$WWW/index.php" ]; then
+  printf '<?php echo "ok"; ?>\n' > "$WWW/index.php" || exit 1
+fi
+
+# create log files if missing
+: > "$PHP_LOG"
+: > "$CLOUDFLARED_LOG"
+
+# set safe permissions where sensible
+chmod 600 "$PHP_LOG" "$CLOUDFLARED_LOG" 2>/dev/null || true
+chmod 644 "$WWW/index.php" 2>/dev/null || true
+
+# quick verification output (optional)
+printf 'BASE=%s\nWWW=%s\nPHP_LOG=%s\nCLOUDFLARED_LOG=%s\n' "$BASE" "$WWW" "$PHP_LOG" "$CLOUDFLARED_LOG"
 
 # --- 1) Ensure Cloudflared installed ---
 if ! command -v cloudflared >/dev/null 2>&1; then
