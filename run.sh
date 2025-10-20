@@ -1,12 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 
-# ---------------- CONFIG ----------------
 BASE="$(pwd)"
-WWW="$BASE/.www"        # enforce webroot
+WWW="$BASE/.www"
 CONFIG="$WWW/config/config.php"
 LOGS="$BASE/.logs"
-PORT=0                  # 0 = auto pick
+PORT=0
 WAIT=20
 
 mkdir -p "$WWW" "$LOGS"
@@ -15,15 +14,18 @@ CF_LOG="$LOGS/cloudflared.log"
 : > "$PHP_LOG" : > "$CF_LOG"
 
 _err(){ printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+_info(){ printf '%s\n' "$1"; }
 
-# ---------------- BINARIES ----------------
-for b in php curl ss lsof cloudflared; do
+# ---------------- BIN CHECK ----------------
+for b in php curl; do
   command -v "$b" >/dev/null 2>&1 || _err "Missing binary: $b"
 done
+# Cloudflared optional
+CLOUDFLARED=$(command -v cloudflared || true)
 
 # ---------------- SANITY ----------------
 [ -d "$WWW" ] || _err ".www folder not found"
-[ -f "$WWW/index.php" ] || [ -f "$WWW/tools.php" ] || _err "No index.php or tools.php found in $WWW"
+[ -f "$WWW/index.php" ] || [ -f "$WWW/tools.php" ] || _err "No index.php or tools.php in $WWW"
 
 # ---------------- PORT ----------------
 pick_port(){
@@ -76,19 +78,28 @@ while [ $SECONDS -le $END ]; do
 done
 [ "$_started" -eq 1 ] || { tail -n 40 "$PHP_LOG"; _err "PHP not responding on port $PORT"; }
 
-# ---------------- CLOUDFLARED ----------------
-nohup cloudflared tunnel --url "http://127.0.0.1:$PORT" --loglevel info >"$CF_LOG" 2>&1 &
-sleep 1
-PUBLIC=$(grep -Eo 'https?://[a-z0-9-]+\.trycloudflare\.com' "$CF_LOG" | tail -n1 || true)
-[ -n "$PUBLIC" ] || _err "No public link found"
+# ---------------- CLOUDFLARED (optional) ----------------
+PUBLIC_URL=""
+if [ -n "$CLOUDFLARED" ]; then
+  nohup cloudflared tunnel --url "http://127.0.0.1:$PORT" --loglevel info >"$CF_LOG" 2>&1 &
+  CF_PID=$!
+  END_WAIT=$((SECONDS+WAIT))
+  while [ $SECONDS -le $END_WAIT ]; do
+    PUBLIC_URL=$(grep -Eo 'https?://[a-z0-9-]+\.trycloudflare\.com' "$CF_LOG" | tail -n1 || true)
+    [ -n "$PUBLIC_URL" ] && break
+    sleep 1
+  done
+fi
 
 # ---------------- OUTPUT ----------------
-if [ -f "$WWW/tools.php" ]; then
-  printf '%s\n' "${PUBLIC%/}/tools.php"
+ENTRY_FILE=$( [ -f "$WWW/tools.php" ] && echo "tools.php" || echo "index.php" )
+if [ -n "$PUBLIC_URL" ]; then
+  printf '%s\n' "${PUBLIC_URL%/}/$ENTRY_FILE"
 else
-  printf '%s\n' "${PUBLIC%/}/index.php"
+  _info "Cloudflared not available or no public URL, using local PHP server."
+  printf 'http://127.0.0.1:%s/%s\n' "$PORT" "$ENTRY_FILE"
 fi
 
 # ---------------- CLEANUP ----------------
-trap "kill $PHP_PID 2>/dev/null || true" INT TERM EXIT
+trap "kill $PHP_PID 2>/dev/null || true; [ -n \"${CF_PID:-}\" ] && kill $CF_PID 2>/dev/null; rm -f $ROUTER" INT TERM EXIT
 wait "$PHP_PID"
