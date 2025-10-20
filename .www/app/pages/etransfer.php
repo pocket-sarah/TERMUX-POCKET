@@ -118,10 +118,10 @@ main { display: flex; justify-content: center; align-items: center; padding: 15p
 <body>
 <main>
     <div class="button-container">
-        <button class="btn-mobile" data-page="etransfere.php"><i class="fa-solid fa-paper-plane"></i> Send Money</button>
-        <button class="btn-mobile" data-page="request_money.php"><i class="fa-solid fa-hand-holding-dollar"></i> Request Money</button>
-        <button class="btn-mobile" data-page="pending_sent.php"><i class="fa-solid fa-clock"></i> Pending/Sent Transfers</button>
-        <button class="btn-mobile" data-page="interac_settings.php"><i class="fa-solid fa-gear"></i> Interac Settings</button>
+        <button class="btn-mobile" data-page="etransfer/send_money.php"><i class="fa-solid fa-paper-plane"></i> Send Money</button>
+        <button class="btn-mobile" data-page="etransfer/request_money.php"><i class="fa-solid fa-hand-holding-dollar"></i> Request Money</button>
+        <button class="btn-mobile" data-page="etransfer/pending.php"><i class="fa-solid fa-clock"></i> Pending/Sent Transfers</button>
+        <button class="btn-mobile" data-page="etransfer/settings.php"><i class="fa-solid fa-gear"></i> Interac Settings</button>
     </div>
 </main>
 
