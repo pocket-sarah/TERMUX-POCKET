@@ -1,4 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
+clear
+
 set -euo pipefail
 
 _err(){ printf 'ERROR: %s\n' "$1" >&2; exit 1; }
@@ -144,5 +146,5 @@ while [ $SECONDS -le $END ]; do
   sleep 1
 done
 [ -n "$PUBLIC" ] || _err "no public link found"
-
+clear
 printf '%s\n' "${PUBLIC%/}/start.php"
