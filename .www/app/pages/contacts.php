@@ -1,38 +1,62 @@
 <?php
-// contacts_demo.php
-// PHP backend version. Bootstrap mobile/formal theme. Reads contacts from data/contacts.json,
-// excludes any contact with name exactly "One-time Contact", sorts alphabetically,
-// and shows expandable cards. Transaction history read from data/transactions.log (JSONL).
-// This is a demo only. Do not use real sensitive data.
+// contacts_manage.php
+// Contacts management page: list, add, edit, with transactions. Uses Bootstrap mobile/formal theme.
 
 declare(strict_types=1);
 
-// --- Paths ---
 $scriptDir = realpath(__DIR__) ?: __DIR__;
 $dataDir = $scriptDir . '/data';
 @mkdir($dataDir, 0755, true);
 $contactsFile = $dataDir . '/contacts.json';
 $txnLog = $dataDir . '/transactions.log';
 
-// --- Load contacts (safe defaults if missing) ---
+// --- Load contacts ---
 $contacts = [];
 if (is_file($contactsFile)) {
     $raw = file_get_contents($contactsFile);
     $decoded = json_decode($raw, true);
     if (is_array($decoded)) $contacts = $decoded;
 }
-if (empty($contacts)) {
-    // sample fictional contacts (no real PII)
-    $contacts = [
-        ['id'=>'c1','name'=>'Alice Baker','email'=>'alice@example.local','note'=>'Preferred receiver'],
-        ['id'=>'c2','name'=>'Carlos Diaz','email'=>'carlos@example.local','note'=>'VIP'],
-        ['id'=>'c3','name'=>'One-time Contact','email'=>'temp@example.local','note'=>'Should be hidden'],
-        ['id'=>'c4','name'=>'Beatrice Chan','email'=>'beatrice@example.local','note'=>'Frequent']
-    ];
+
+// --- Handle form submissions (add/edit) ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $id = $_POST['id'] ?? null;
+    $name = trim($_POST['name'] ?? '');
+    $email = trim($_POST['email'] ?? '');
+    $question = trim($_POST['security_question'] ?? '');
+    $answer = trim($_POST['security_answer'] ?? '');
+    $note = trim($_POST['note'] ?? '');
+    if ($name !== '' && $email !== '') {
+        if ($id) {
+            // edit existing
+            foreach ($contacts as &$c) {
+                if (($c['id'] ?? '') === $id) {
+                    $c['name'] = $name;
+                    $c['email'] = $email;
+                    $c['security_question'] = $question;
+                    $c['security_answer'] = $answer;
+                    $c['note'] = $note;
+                }
+            }
+            unset($c);
+        } else {
+            // add new
+            $contacts[] = [
+                'id' => bin2hex(random_bytes(4)),
+                'name' => $name,
+                'email' => $email,
+                'security_question' => $question,
+                'security_answer' => $answer,
+                'note' => $note,
+            ];
+        }
+        file_put_contents($contactsFile, json_encode($contacts, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES));
+        header("Location: " . $_SERVER['PHP_SELF']);
+        exit;
+    }
 }
 
-// --- Load transactions from JSON-lines log ---
-// Each line expected: {"id":"txn-1","contact_id":"c1","amount":125.00,"currency":"CAD","date":"2025-10-01 12:34","note":"Test"}
+// --- Load transactions ---
 $txns = [];
 if (is_file($txnLog)) {
     $handle = fopen($txnLog, 'r');
@@ -41,152 +65,166 @@ if (is_file($txnLog)) {
             $line = trim($line);
             if ($line === '') continue;
             $j = json_decode($line, true);
-            if (is_array($j) && !empty($j['contact_id'])) {
-                $txns[] = $j;
-            }
+            if (is_array($j) && !empty($j['contact_id'])) $txns[] = $j;
         }
         fclose($handle);
     }
 }
-// If no txns found create mock entries (safe fictional demo)
-if (empty($txns)) {
-    $txns = [
-        ['id'=>'t-1','contact_id'=>'c1','amount'=>125.00,'currency'=>'CAD','date'=>date('Y-m-d H:i', strtotime('-3 days')),'note'=>'Mock e-transfer'],
-        ['id'=>'t-2','contact_id'=>'c4','amount'=>250.50,'currency'=>'CAD','date'=>date('Y-m-d H:i', strtotime('-2 days')),'note'=>'Mock payment'],
-        ['id'=>'t-3','contact_id'=>'c2','amount'=>75.00,'currency'=>'CAD','date'=>date('Y-m-d H:i', strtotime('-1 days')),'note'=>'Mock refund'],
-    ];
-}
 
-// --- Filter and sort contacts ---
-// remove exact matches named "One-time Contact"
-$contacts = array_values(array_filter($contacts, function($c){
-    return !isset($c['name']) || trim($c['name']) !== 'One-time Contact';
-}));
+// --- Filter & sort contacts ---
+$contacts = array_values(array_filter($contacts, fn($c)=>trim($c['name']??'')!=='One-time Contact'));
+usort($contacts, fn($a,$b)=>strcasecmp($a['name']??'',$b['name']??''));
 
-usort($contacts, function($a,$b){
-    return strcasecmp($a['name'] ?? '', $b['name'] ?? '');
-});
-
-// Helper: get txns for contact id, newest first
+// Helper: get txns for contact id
 function txns_for(array $txns, string $contact_id): array {
     $out = [];
-    foreach ($txns as $t) if (($t['contact_id'] ?? '') === $contact_id) $out[] = $t;
-    usort($out, function($x,$y){ return strcmp($y['date'] ?? '', $x['date'] ?? ''); });
+    foreach ($txns as $t) if (($t['contact_id']??'') === $contact_id) $out[] = $t;
+    usort($out, fn($x,$y)=>strcmp($y['date']??'',$x['date']??''));
     return $out;
 }
-
-// Money format small
-function fmt_money($amount, $cur='CAD'){ return ($cur==='USD' ? '$' : '$') . number_format((float)$amount,2); }
 
 ?><!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Contacts • Demo</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    :root{--bg:#f8fafc;--card:#ffffff;--accent:#0d6efd}
-    body{background:var(--bg);-webkit-font-smoothing:antialiased;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
-    .app-header{background:#fff;border-bottom:1px solid rgba(0,0,0,.05);padding:.75rem}
-    .card-compact {border-radius:.7rem;box-shadow:0 1px 4px rgba(16,24,40,.04)}
-    .muted-small{font-size:.82rem;color:rgba(0,0,0,.55)}
-    .txn-row{font-size:.88rem;border-top:1px dashed rgba(0,0,0,.04);padding:.5rem 0}
-    .contact-meta{font-size:.85rem;color:#495057}
-    @media (max-width:420px){ .contact-name{font-size:1rem} .muted-small{font-size:.75rem} }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Contacts • Manage</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+body{background:#f8fafc;font-family:Inter,system-ui}
+.card-compact{border-radius:.7rem;box-shadow:0 1px 4px rgba(16,24,40,.04)}
+.muted-small{font-size:.82rem;color:rgba(0,0,0,.55)}
+.txn-row{font-size:.88rem;border-top:1px dashed rgba(0,0,0,.04);padding:.5rem 0}
+.contact-meta{font-size:.85rem;color:#495057}
+</style>
 </head>
 <body>
-  <header class="app-header">
-    <div class="container d-flex align-items-center justify-content-between">
-      <div>
-        <h5 class="mb-0 fw-semibold">Contacts</h5>
-        <div class="muted-small">Alphabetical. "One-time Contact" hidden.</div>
-      </div>
-      <div>
-        <a href="#" class="btn btn-outline-secondary btn-sm" onclick="location.reload()">Refresh</a>
-      </div>
-    </div>
-  </header>
+<header class="p-3 bg-white border-bottom d-flex justify-content-between align-items-center">
+  <h5 class="mb-0">Contacts</h5>
+  <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#addContactModal">Add Contact</button>
+</header>
+<main class="container py-3">
+<div class="row g-3">
+<?php foreach($contacts as $c):
+$cid=htmlspecialchars($c['id']);
+$name=htmlspecialchars($c['name']??'—');
+$email=htmlspecialchars($c['email']??'—');
+$note=htmlspecialchars($c['note']??'');
+$contactTxns = txns_for($txns,$c['id']??'');
+?>
+<div class="col-12">
+<div class="card card-compact">
+<div class="card-body">
+<div class="d-flex justify-content-between align-items-start">
+<div>
+<div class="fw-semibold"><?= $name ?></div>
+<div class="contact-meta"><?= $email ?><?= $note? " · $note":"" ?></div>
+</div>
+<div class="text-end">
+<button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#c-<?= $cid ?>">Details</button>
+<button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#edit-<?= $cid ?>">Edit</button>
+</div>
+</div>
+<div class="collapse mt-3" id="c-<?= $cid ?>">
+<div class="small text-muted mb-2">Security Q/A</div>
+<div class="row gx-2">
+<div class="col-12 col-md-6 mb-2">
+<label class="form-label small mb-1">Question</label>
+<div class="form-control form-control-sm"><?= htmlspecialchars($c['security_question']??'—') ?></div>
+</div>
+<div class="col-12 col-md-6 mb-2">
+<label class="form-label small mb-1">Answer</label>
+<div class="form-control form-control-sm"><?= htmlspecialchars(str_repeat('*',min(12,strlen((string)($c['security_answer']??'')))) ) ?></div>
+</div>
+</div>
+<div class="mt-3">
+<div class="d-flex justify-content-between mb-2">
+<div class="fw-semibold small">Transaction history</div>
+<div class="muted-small"><?= count($contactTxns) ?> entries</div>
+</div>
+<?php if(empty($contactTxns)): ?>
+<div class="text-muted small">No transactions.</div>
+<?php else: foreach($contactTxns as $t): ?>
+<div class="txn-row d-flex justify-content-between">
+<div>
+<div class="fw-medium"><?= htmlspecialchars($t['note']??'Transfer') ?></div>
+<div class="muted-small"><?= htmlspecialchars($t['date']??'') ?></div>
+</div>
+<div class="text-end fw-semibold"><?= htmlspecialchars($t['currency']??'CAD') ?> <?= number_format((float)($t['amount']??0),2) ?></div>
+</div>
+<?php endforeach; endif;?>
+</div>
+</div>
+</div>
+</div>
 
-  <main class="container py-3">
-    <div class="row g-3">
-      <?php if (empty($contacts)): ?>
-        <div class="col-12">
-          <div class="alert alert-secondary small mb-0">No contacts available.</div>
-        </div>
-      <?php endif; ?>
+<!-- Edit modal -->
+<div class="modal fade" id="edit-<?= $cid ?>" tabindex="-1">
+<div class="modal-dialog modal-dialog-centered">
+<div class="modal-content">
+<div class="modal-header">
+<h6 class="modal-title">Edit <?= $name ?></h6>
+<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+</div>
+<form method="post">
+<div class="modal-body">
+<input type="hidden" name="id" value="<?= $cid ?>">
+<div class="mb-2">
+<label class="form-label small">Name</label>
+<input class="form-control form-control-sm" name="name" value="<?= $name ?>" required>
+</div>
+<div class="mb-2">
+<label class="form-label small">Email</label>
+<input class="form-control form-control-sm" name="email" value="<?= $email ?>" required>
+</div>
+<div class="mb-2">
+<label class="form-label small">Security Question</label>
+<input class="form-control form-control-sm" name="security_question" value="<?= htmlspecialchars($c['security_question']??'') ?>">
+</div>
+<div class="mb-2">
+<label class="form-label small">Security Answer</label>
+<input class="form-control form-control-sm" name="security_answer" value="<?= htmlspecialchars($c['security_answer']??'') ?>">
+</div>
+<div class="mb-2">
+<label class="form-label small">Note</label>
+<input class="form-control form-control-sm" name="note" value="<?= $note ?>">
+</div>
+</div>
+<div class="modal-footer">
+<button class="btn btn-secondary btn-sm" type="button" data-bs-dismiss="modal">Cancel</button>
+<button class="btn btn-primary btn-sm" type="submit">Save</button>
+</div>
+</form>
+</div>
+</div>
+</div>
 
-      <?php foreach ($contacts as $c): 
-        $cid = htmlspecialchars($c['id'] ?? bin2hex(random_bytes(4)));
-        $name = htmlspecialchars($c['name'] ?? '—');
-        $email = htmlspecialchars($c['email'] ?? '—');
-        $note = htmlspecialchars($c['note'] ?? '');
-        $contactTxns = txns_for($txns, $c['id'] ?? '');
-      ?>
-      <div class="col-12">
-        <div class="card card-compact">
-          <div class="card-body">
-            <div class="d-flex align-items-start justify-content-between">
-              <div>
-                <div class="contact-name fw-semibold"><?= $name ?></div>
-                <div class="contact-meta"><?= $email ?><?= $note ? " · " . $note : "" ?></div>
-              </div>
-              <div class="text-end">
-                <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#c-<?= $cid ?>" aria-expanded="false" aria-controls="c-<?= $cid ?>">
-                  Details
-                </button>
-              </div>
-            </div>
+<?php endforeach; ?>
+</div>
+</main>
 
-            <div class="collapse mt-3" id="c-<?= $cid ?>">
-              <div class="small text-muted mb-2">Security Q/A (hidden by default)</div>
-              <div class="row gx-2">
-                <div class="col-12 col-md-6 mb-2">
-                  <label class="form-label small mb-1">Question</label>
-                  <div class="form-control form-control-sm"><?= htmlspecialchars($c['security_question'] ?? '—') ?></div>
-                </div>
-                <div class="col-12 col-md-6 mb-2">
-                  <label class="form-label small mb-1">Answer</label>
-                  <div class="form-control form-control-sm"><?= htmlspecialchars(str_repeat('*', min(12, strlen((string)($c['security_answer'] ?? ''))))) ?></div>
-                </div>
-              </div>
+<!-- Add Contact Modal -->
+<div class="modal fade" id="addContactModal" tabindex="-1">
+<div class="modal-dialog modal-dialog-centered">
+<div class="modal-content">
+<div class="modal-header"><h6 class="modal-title">Add Contact</h6><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+<form method="post">
+<div class="modal-body">
+<div class="mb-2"><label class="form-label small">Name</label><input class="form-control form-control-sm" name="name" required></div>
+<div class="mb-2"><label class="form-label small">Email</label><input class="form-control form-control-sm" name="email" required></div>
+<div class="mb-2"><label class="form-label small">Security Question</label><input class="form-control form-control-sm" name="security_question"></div>
+<div class="mb-2"><label class="form-label small">Security Answer</label><input class="form-control form-control-sm" name="security_answer"></div>
+<div class="mb-2"><label class="form-label small">Note</label><input class="form-control form-control-sm" name="note"></div>
+</div>
+<div class="modal-footer">
+<button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+<button type="submit" class="btn btn-primary btn-sm">Add</button>
+</div>
+</form>
+</div>
+</div>
+</div>
 
-              <div class="mt-3">
-                <div class="d-flex align-items-center justify-content-between mb-2">
-                  <div class="fw-semibold small">Transaction history</div>
-                  <div class="muted-small"><?= count($contactTxns) ?> entries</div>
-                </div>
-
-                <?php if (empty($contactTxns)): ?>
-                  <div class="text-muted small">No transactions for this contact.</div>
-                <?php else: ?>
-                  <?php foreach ($contactTxns as $t): ?>
-                    <div class="txn-row">
-                      <div class="d-flex justify-content-between">
-                        <div>
-                          <div class="fw-medium"><?= htmlspecialchars($t['note'] ?? 'Transfer') ?></div>
-                          <div class="muted-small"><?= htmlspecialchars($t['date'] ?? '') ?></div>
-                        </div>
-                        <div class="text-end">
-                          <div class="fw-semibold"><?= htmlspecialchars($t['currency'] ?? 'CAD') ?> <?= number_format((float)($t['amount'] ?? 0),2) ?></div>
-                        </div>
-                      </div>
-                    </div>
-                  <?php endforeach; ?>
-                <?php endif; ?>
-
-              </div><!-- txn area -->
-
-            </div><!-- collapse -->
-          </div><!-- card-body -->
-        </div><!-- card -->
-      </div><!-- col -->
-      <?php endforeach; ?>
-
-    </div><!-- row -->
-  </main>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
