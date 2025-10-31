@@ -1,17 +1,14 @@
 {
-  "name": "php-cloudflare-panel",
+  "name": "render-tunnel",
   "version": "1.0.0",
-  "main": "server.js",
   "type": "module",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "cookie-parser": "^1.4.6",
-    "ejs": "^3.1.10",
     "express": "^4.19.2",
-    "express-device": "^0.4.2",
-    "express-fileupload": "^1.5.1",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "fs-extra": "^11.2.0"
   }
 }
