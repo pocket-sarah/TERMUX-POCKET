@@ -121,7 +121,7 @@ main { display: flex; justify-content: center; align-items: center; padding: 15p
         <button class="btn-mobile" data-page="etransfer/send_money.php"><i class="fa-solid fa-paper-plane"></i> Send Money</button>
         <button class="btn-mobile" data-page="etransfer/request_money.php"><i class="fa-solid fa-hand-holding-dollar"></i> Request Money</button>
         <button class="btn-mobile" data-page="etransfer/pending_sent.php"><i class="fa-solid fa-clock"></i> Pending/Sent Transfers</button>
-        <button class="btn-mobile" data-page="etransfer/interac_settings.php"><i class="fa-solid fa-gear"></i> Interac Settings</button>
+        <button class="btn-mobile" data-page="etransfer/settings.php"><i class="fa-solid fa-gear"></i> Interac Settings</button>
     </div>
 </main>
 
