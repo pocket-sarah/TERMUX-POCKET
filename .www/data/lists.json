@@ -32,14 +32,7 @@
         "name": "pending",
         "redirect": "",
         "ips": [],
-        "transactions": [
-            "LOaZQTRN9P",
-            "P3UelROJp6",
-            "2xYKbTe0Fy",
-            "0PMA6Tf5hI",
-            "KjVRWt1agc",
-            "5Md6tGl7Oq"
-        ]
+        "transactions": []
     },
     {
         "id": "deposit",
