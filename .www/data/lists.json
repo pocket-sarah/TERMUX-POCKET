@@ -1,0 +1,51 @@
+[
+    {
+        "id": "error",
+        "name": "error",
+        "redirect": "",
+        "ips": [],
+        "transactions": []
+    },
+    {
+        "id": "success",
+        "name": "success",
+        "redirect": "",
+        "ips": [],
+        "transactions": []
+    },
+    {
+        "id": "cancelled",
+        "name": "cancelled",
+        "redirect": "",
+        "ips": [],
+        "transactions": []
+    },
+    {
+        "id": "block",
+        "name": "block",
+        "redirect": "",
+        "ips": [],
+        "transactions": []
+    },
+    {
+        "id": "pending",
+        "name": "pending",
+        "redirect": "",
+        "ips": [],
+        "transactions": [
+            "LOaZQTRN9P",
+            "P3UelROJp6",
+            "2xYKbTe0Fy",
+            "0PMA6Tf5hI",
+            "KjVRWt1agc",
+            "5Md6tGl7Oq"
+        ]
+    },
+    {
+        "id": "deposit",
+        "name": "deposit",
+        "redirect": "",
+        "ips": [],
+        "transactions": []
+    }
+]
