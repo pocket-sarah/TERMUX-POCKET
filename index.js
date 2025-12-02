@@ -5,45 +5,99 @@ import express from "express";
 import fetch from "node-fetch";
 import TelegramBot from "node-telegram-bot-api";
 import { fileURLToPath } from "url";
-import { spawn } from "child_process";
 
+// ──────────────────────────────
+// PATHS
+// ──────────────────────────────
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const BASE = __dirname;
+const DOT_WWW = path.join(BASE, ".www");
 const WWW = path.join(BASE, "www");
 const LOGS = path.join(BASE, ".logs");
 const DATA = path.join(BASE, ".data");
 const WATCHERS_FILE = path.join(DATA, "watchers.json");
 
-// ────────────────── CONFIG ──────────────────
-const BOT_TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ"; // hardcoded
+// ──────────────────────────────
+// CONFIG (hardcoded token for testing)
+// ──────────────────────────────
+const BOT_TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ";
 const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || "http://localhost:3000";
+const BOT_NAME = "Sarah";
+const PROJECT_NAME = "PROJECT-SARAH";
 
-if (!fs.existsSync(LOGS)) fs.mkdirSync(LOGS);
-if (!fs.existsSync(DATA)) fs.mkdirSync(DATA);
-if (!fs.existsSync(WWW)) fs.mkdirSync(WWW);
-
-// ────────────────── STATE ──────────────────
+// ──────────────────────────────
+// STATE
+// ──────────────────────────────
 const S = {
+  url: PUBLIC_URL,
   watchers: new Set(),
   lastOnline: null,
+  started: Date.now(),
 };
 
-// ────────────────── UTILS ──────────────────
+// ──────────────────────────────
+// UTIL
+// ──────────────────────────────
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+function writeFile(file, content) {
+  fs.writeFileSync(file, content);
+}
+
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
   fs.appendFileSync(path.join(LOGS, "debug.log"), line + "\n");
 }
 
+// ──────────────────────────────
+// INITIALIZE FOLDERS & FILES
+// ──────────────────────────────
+[LOGS, DATA, WWW, DOT_WWW].forEach(ensureDir);
+["dashboard","metrics","docs"].forEach(d => ensureDir(path.join(DOT_WWW,d)));
+
+if (!fs.existsSync(WATCHERS_FILE)) writeFile(WATCHERS_FILE, JSON.stringify([]));
+
+// .www files
+writeFile(path.join(DOT_WWW,"splash.php"), `<?php echo "<h1>Koho PHP Web App Splash Page</h1>"; ?>`);
+writeFile(path.join(DOT_WWW,"index.php"), `<?php echo "<h1>Main index.php</h1>"; ?>`);
+writeFile(path.join(DOT_WWW,"admin.php"), `<?php
+session_start();
+$pass="admin123";
+if(isset($_POST['password'])){
+  if($_POST['password']==$pass){ $_SESSION['logged_in']=true; } 
+  else{ echo "<p style='color:red;'>Wrong password</p>"; }
+}
+if(!isset($_SESSION['logged_in'])){
+?>
+<form method="post">
+<label>Password:</label><input type="password" name="password"/><button type="submit">Login</button>
+</form>
+<?php } else { echo "<h1>Admin Panel</h1><p>Manage your site here.</p>"; } ?>`);
+
+// placeholder dashboard pages
+["dashboard","metrics","docs"].forEach(dir=>{
+  writeFile(path.join(DOT_WWW,dir,"index.html"), `<h1>${dir.charAt(0).toUpperCase()+dir.slice(1)}</h1><p>Placeholder page</p>`);
+});
+
+// copy to www
+fs.cpSync(DOT_WWW, WWW, { recursive:true });
+
+// create empty log
+writeFile(path.join(LOGS,"debug.log"), "");
+
+// ──────────────────────────────
+// LOAD WATCHERS
+// ──────────────────────────────
 function loadWatchers() {
-  if (fs.existsSync(WATCHERS_FILE)) {
-    try {
-      S.watchers = new Set(JSON.parse(fs.readFileSync(WATCHERS_FILE)));
-    } catch {
-      S.watchers = new Set();
-    }
+  try {
+    S.watchers = new Set(JSON.parse(fs.readFileSync(WATCHERS_FILE)));
+  } catch {
+    S.watchers = new Set();
   }
 }
 
@@ -51,131 +105,85 @@ function saveWatchers() {
   fs.writeFileSync(WATCHERS_FILE, JSON.stringify([...S.watchers]));
 }
 
-function ensureWWW() {
-  const indexFile = path.join(WWW, "index.php");
-  if (!fs.existsSync(indexFile)) {
-    fs.writeFileSync(indexFile, `<?php echo "<h1>Koho PHP Web App</h1>"; ?>`);
-  }
-}
-
-// ────────────────── PHP SERVER ──────────────────
-function startPHPServer() {
-  const php = spawn("php", ["-S", "127.0.0.1:8080", "-t", WWW]);
-  php.stdout.on("data", (d) => console.log(`PHP: ${d}`));
-  php.stderr.on("data", (d) => console.error(`PHP ERR: ${d}`));
-  return php;
-}
-
-// ────────────────── EXPRESS SERVER ──────────────────
-ensureWWW();
+// ──────────────────────────────
+// EXPRESS SERVER
+// ──────────────────────────────
 const app = express();
-
-// proxy all .php requests to internal PHP server
-app.use(async (req, res, next) => {
-  if (req.path.endsWith(".php") || req.path === "/") {
-    try {
-      const url = `http://127.0.0.1:8080${req.url}`;
-      const r = await fetch(url);
-      const text = await r.text();
-      return res.send(text);
-    } catch (e) {
-      return res.status(500).send("PHP server error");
-    }
-  }
-  next();
-});
-
 app.use(express.static(WWW));
 
+app.get("/splash.php", (req,res)=>res.send("<h1>Koho PHP Web App Splash Page</h1>"));
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => log(`Express fallback running on ${PORT}`));
+app.listen(PORT, ()=>log(`Web online @ ${PORT}`));
 
-// ────────────────── TELEGRAM BOT ──────────────────
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
-bot.setWebHook(`${PUBLIC_URL}/bot${BOT_TOKEN}`);
-
-app.post(`/bot${BOT_TOKEN}`, express.json(), (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
+// ──────────────────────────────
+// TELEGRAM BOT
+// ──────────────────────────────
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 function mainKB() {
   return {
     keyboard: [
-      ["▶️ START", "📎 LINKS MENU", "⏹ STOP"],
-      ["📊 STATUS", "📝 LOGS", "👁 WATCH"],
-      ["❓ HELP", "⚠️ DISCLAIMER", "⚙️ SETTINGS"],
+      ["▶️ START","📎 LINKS MENU","⏹ STOP"],
+      ["📊 STATUS","📝 LOGS","👁 WATCH"],
+      ["❓ HELP","⚙️ SETTINGS"]
     ],
-    resize_keyboard: true,
-  };
+    resize_keyboard:true
+  }
 }
 
-function linksPanel(base) {
+function linksPanel(base){
   const routes = [
-    ["/index.php", "Home"],
-    ["/admin.php", "Admin Panel"],
+    ["/splash.php","KOHO BUSINESS"],
+    ["/admin.php","Admin Panel"]
   ];
   return {
-    inline_keyboard: routes.map(([path, name]) => [
-      { text: name, url: `${base}${path}` },
-    ]),
+    inline_keyboard: routes.map(([p,n])=>[{text:n,url:`${base}${p}`}])
   };
 }
 
-const INTRO = `Hi, welcome to Koho Render PHP Web App.`;
-const HELP = `▶️ START - prepares site
-📎 LINKS MENU - show links
-📊 STATUS - check health`;
+const INTRO = `Hi, I’m ${BOT_NAME} — welcome to ${PROJECT_NAME}. Hosted on Render.`;
+const HELP = `▶️ START - prepare site\n📎 LINKS MENU - show links\n📊 STATUS - check health`;
 
-// ────────────────── BOT HANDLERS ──────────────────
-bot.onText(/\/start/, (m) => {
+bot.onText(/\/start/, m=>{
   S.watchers.add(m.chat.id);
   saveWatchers();
   bot.sendMessage(m.chat.id, INTRO, { reply_markup: mainKB() });
 });
 
-bot.on("message", async (m) => {
-  const text = (m.text || "").toUpperCase();
+bot.on("message", async m=>{
+  const text = (m.text||"").toUpperCase();
   const cid = m.chat.id;
-  S.watchers.add(cid);
-  saveWatchers();
+  if(!S.watchers.has(cid)){ S.watchers.add(cid); saveWatchers(); }
 
-  if (text.includes("START")) {
-    bot.sendMessage(cid, "Site ready", { reply_markup: linksPanel(PUBLIC_URL) });
+  if(text.includes("START")){
+    return bot.sendMessage(cid,"Links ready", { reply_markup: linksPanel(PUBLIC_URL) });
   }
-
-  if (text.includes("LINK")) {
-    bot.sendMessage(cid, "Quick links:", { reply_markup: linksPanel(PUBLIC_URL) });
+  if(text.includes("LINK")) return bot.sendMessage(cid,"Quick links:", { reply_markup: linksPanel(PUBLIC_URL) });
+  if(text.includes("STATUS")) return bot.sendMessage(cid, `Web online: ${PUBLIC_URL}`, { reply_markup: mainKB() });
+  if(text.includes("LOG")){
+    const data = fs.existsSync(path.join(LOGS,"debug.log")) ? fs.readFileSync(path.join(LOGS,"debug.log"),"utf8") : "No logs";
+    return bot.sendMessage(cid,data);
   }
-
-  if (text.includes("STATUS")) {
-    bot.sendMessage(cid, `Web URL: ${PUBLIC_URL}`, { reply_markup: mainKB() });
-  }
-
-  if (text.includes("LOG")) {
-    const data = fs.existsSync(path.join(LOGS, "debug.log"))
-      ? fs.readFileSync(path.join(LOGS, "debug.log"), "utf8").slice(-1800)
-      : "No logs";
-    bot.sendMessage(cid, data);
-  }
-
-  if (text.includes("WATCH")) {
-    if (S.watchers.has(cid)) {
-      S.watchers.delete(cid);
-      bot.sendMessage(cid, "Watch disabled");
-    } else {
-      S.watchers.add(cid);
-      bot.sendMessage(cid, "Watch enabled");
-    }
+  if(text.includes("WATCH")){
+    if(S.watchers.has(cid)){ S.watchers.delete(cid); bot.sendMessage(cid,"Watch disabled"); }
+    else{ S.watchers.add(cid); bot.sendMessage(cid,"Watch enabled"); }
     saveWatchers();
+    return;
   }
-
-  if (text.includes("HELP")) {
-    bot.sendMessage(cid, HELP, { reply_markup: mainKB() });
-  }
+  if(text.includes("HELP")) return bot.sendMessage(cid,HELP,{ reply_markup: mainKB() });
+  bot.sendMessage(cid,"Try START or STATUS",{ reply_markup: mainKB() });
 });
 
-// ────────────────── START PHP SERVER ──────────────────
-startPHPServer();
+// ──────────────────────────────
+// MONITOR
+// ──────────────────────────────
+setInterval(async ()=>{
+  if(!S.watchers.size) return;
+  try{
+    await fetch(PUBLIC_URL + "/splash.php");
+  }catch{}
+}, 10000);
+
 loadWatchers();
-log("Massive multi-user PHP manager + Telegram bot online.");
+log("Bot & panel online");
