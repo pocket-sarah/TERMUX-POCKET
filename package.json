@@ -1,17 +1,15 @@
 {
   "name": "render-php-telegram-panel",
   "version": "1.0.0",
-  "description": "Render compatible PHP + Node bridge",
-  "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "prepare": "mkdir -p .logs .data public"
+    "prepare": "mkdir -p .logs .data www .www",
+    "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "node-fetch": "3.3.2",
-    "dotenv": "^16.4.5"
+    "express": "^4.18.2",
+    "fs-extra": "^11.1.1",
+    "node-telegram-bot-api": "^0.61.0"
   },
   "engines": {
     "node": ">=18"
