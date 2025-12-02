@@ -3,15 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "prepare": "mkdir -p .logs .data www .www",
-    "start": "node index.js"
+    "start": "node index.js",
+    "prepare": "mkdir -p .logs .data www"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "fs-extra": "^11.1.1",
-    "node-telegram-bot-api": "^0.61.0"
-  },
-  "engines": {
-    "node": ">=18"
+    "node-telegram-bot-api": "^1.11.0",
+    "node-fetch": "^3.3.1"
   }
 }
