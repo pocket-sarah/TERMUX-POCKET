@@ -1,7 +1,10 @@
 services:
   - type: web
-    name: php-node-server
+    name: project-sarah
     env: node
-    plan: free
-    buildCommand: npm install
-    startCommand: node render.js
+    buildCommand: |
+      apt-get update
+      apt-get install -y php php-cli php-curl php-mbstring php-xml
+      npm install
+    startCommand: node index.js
+    autoDeploy: true
