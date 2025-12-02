@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "prepare": "mkdir -p .logs .data www .www"
+    "prepare": "mkdir -p .logs .data www .www && touch .logs/debug.log"
   },
   "dependencies": {
     "express": "^4.18.2",
