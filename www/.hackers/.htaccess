@@ -1,0 +1,6 @@
+Order Deny,Allow
+Deny from all
+
+# Allow only if special header is present
+SetEnvIf X-HACKER-KEY "pocket-access" allow_hacker
+Allow from env=allow_hacker
