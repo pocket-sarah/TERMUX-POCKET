@@ -2,190 +2,226 @@
 import fs from "fs";
 import path from "path";
 import { spawn } from "child_process";
+import express from "express";
 import TelegramBot from "node-telegram-bot-api";
-import crypto from "crypto";
+import { fileURLToPath } from "url";
 
-const BASE = path.resolve();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ─────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────
+const BASE = __dirname;
 const DOT_WWW = path.join(BASE, ".www");
 const WWW = path.join(BASE, "www");
 const LOGS = path.join(BASE, ".logs");
 const DATA = path.join(BASE, ".data");
 const PANELS_FILE = path.join(DATA, "panels.json");
 
-const BOT_TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ";
-const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || "http://localhost:3000";
+const BOT_NAME = "Sarah";
+const PROJECT_NAME = "PROJECT-SARAH";
 
-if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
-if (!fs.existsSync(LOGS)) fs.mkdirSync(LOGS, { recursive: true });
-if (!fs.existsSync(DOT_WWW)) fs.mkdirSync(DOT_WWW, { recursive: true });
-if (!fs.existsSync(WWW)) fs.mkdirSync(WWW, { recursive: true });
+// Hardcoded token (replace with env variable for production)
+const TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ";
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+if (!TOKEN) throw "❌ BOT_TOKEN missing";
 
-// ────────────── State ──────────────
-let users = new Map(); // chatId -> [{ token, username, password, folder, port }]
-let masterRedirect = false;
-const adminChats = new Set([123456789]); // Add Telegram IDs allowed to toggle master redirect
-const phpProcesses = new Map(); // token -> child process
+// Create required folders
+for (const d of [LOGS, DATA, WWW, DOT_WWW]) if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 
-// ────────────── Logging ──────────────
+// ─────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
   console.log(line);
   fs.appendFileSync(path.join(LOGS, "debug.log"), line + "\n");
 }
 
-// ────────────── Utils ──────────────
-function randomToken(len = 6) { return crypto.randomBytes(len).toString("hex"); }
+function randomToken(len = 6) {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
 function randomUserPass() {
   return {
-    username: "u_" + crypto.randomBytes(3).toString("hex"),
-    password: crypto.randomBytes(4).toString("hex"),
+    username: "user" + Math.floor(Math.random() * 9999),
+    password: "pass" + Math.floor(Math.random() * 9999)
   };
 }
 
-// Load panels from disk
-if (fs.existsSync(PANELS_FILE)) {
-  try {
-    const raw = JSON.parse(fs.readFileSync(PANELS_FILE, "utf8"));
-    users = new Map(Object.entries(raw).map(([chatId, panels]) => [Number(chatId), panels]));
-  } catch (e) { log("Error reading panels.json"); users = new Map(); }
-}
+let users = new Map();
+let masterRedirect = false;
 
-// Save panels
 function savePanels() {
   const obj = {};
   for (const [chatId, panels] of users.entries()) obj[chatId] = panels;
-  fs.writeFileSync(PANELS_FILE, JSON.stringify(obj, null, 2));
+  fs.writeFileSync(PANELS_FILE, JSON.stringify({ users: obj, masterRedirect }, null, 2));
 }
 
-// Ensure template files
-function ensureTemplate() {
-  const splash = path.join(DOT_WWW, "splash.php");
-  if (!fs.existsSync(splash)) fs.writeFileSync(splash, "<?php echo '<h1>Koho Web App</h1>'; ?>");
-
-  const blacklist = path.join(DOT_WWW, "blacklist.php");
-  if (!fs.existsSync(blacklist)) fs.writeFileSync(blacklist, "<?php echo '<h1>Admin Panel</h1>'; ?>");
-
-  ["dashboard","metrics","docs"].forEach(d => {
-    const folder = path.join(DOT_WWW, d);
-    if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-    const index = path.join(folder, "index.html");
-    if (!fs.existsSync(index)) fs.writeFileSync(index, `<h1>${d}</h1>`);
-  });
+function loadPanels() {
+  if (fs.existsSync(PANELS_FILE)) {
+    const raw = JSON.parse(fs.readFileSync(PANELS_FILE));
+    if (raw.users) {
+      for (const chatId in raw.users) users.set(chatId, raw.users[chatId]);
+    }
+    if (typeof raw.masterRedirect === "boolean") masterRedirect = raw.masterRedirect;
+  }
 }
 
-// Create user panel
+// ─────────────────────────────────────
+// PANEL CREATION
+// ─────────────────────────────────────
 function createUserPanel(chatId) {
   const token = randomToken(6);
   const creds = randomUserPass();
   const folder = path.join(WWW, token);
+
   fs.cpSync(DOT_WWW, folder, { recursive: true });
+
+  // Save credentials in config.php
   fs.writeFileSync(path.join(folder, "config.php"),
-    `<?php $username="${creds.username}"; $password="${creds.password}"; $token="${token}"; ?>`
+`<?php
+$username = "${creds.username}";
+$password = "${creds.password}";
+$token = "${token}";
+?>`
   );
-  const port = 0; // auto port for php -S
-  const panel = { token, folder, ...creds, port };
+
+  // Auto-generate login page
+  fs.writeFileSync(path.join(folder, "index.php"),
+`<?php
+include "config.php";
+session_start();
+if (isset($_POST['user'], $_POST['pass'])) {
+  if ($_POST['user'] === $username && $_POST['pass'] === $password) {
+    $_SESSION['logged'] = true;
+    header("Location: dashboard.php");
+    exit;
+  } else {
+    $error = "Invalid credentials!";
+  }
+}
+?>
+<!doctype html>
+<html>
+<head><title>Login</title></head>
+<body>
+<h1>Welcome to your panel</h1>
+<?php if(isset($error)) echo "<p style='color:red;'>$error</p>"; ?>
+<form method="POST">
+<input name="user" placeholder="Username" required><br>
+<input name="pass" type="password" placeholder="Password" required><br>
+<button type="submit">Login</button>
+</form>
+</body>
+</html>`);
+
+  fs.writeFileSync(path.join(folder, "dashboard.php"),
+`<?php
+include "config.php";
+session_start();
+if (!isset($_SESSION['logged']) || $_SESSION['logged']!==true) {
+  header("Location: index.php"); exit;
+}
+?>
+<!doctype html>
+<html>
+<body>
+<h1>Dashboard</h1>
+<p>Welcome, <?php echo $username; ?>!</p>
+<p>Panel token: <?php echo $token; ?></p>
+</body>
+</html>`);
+
+  const phpProc = spawn("php", ["-S", "0.0.0.0:0", "-t", folder], { stdio: "ignore" });
+
+  const panel = { token, folder, ...creds, pid: phpProc.pid };
   if (!users.has(chatId)) users.set(chatId, []);
   users.get(chatId).push(panel);
   savePanels();
   return panel;
 }
 
-// Start PHP server
-function startPHPServer(panel) {
-  if (phpProcesses.has(panel.token)) return;
-  const php = spawn("php", ["-S", "0.0.0.0:0", "-t", panel.folder]);
-  php.stdout.on("data", d => log(`[PHP ${panel.token}] ${d.toString().trim()}`));
-  php.stderr.on("data", d => log(`[PHP ${panel.token} ERROR] ${d.toString().trim()}`));
-  php.on("exit", code => log(`[PHP ${panel.token}] exited ${code}`));
-  phpProcesses.set(panel.token, php);
+// ─────────────────────────────────────
+// TELEGRAM BOT
+// ─────────────────────────────────────
+const bot = new TelegramBot(TOKEN, { polling: true });
+
+function mainKB() {
+  return {
+    keyboard: [
+      ["➕ NEW PANEL", "📎 MY PANELS", "⏹ STOP ALL"],         // row 1
+      ["📊 STATUS", "📝 LOGS", "👁 WATCH"],                 // row 2
+      ["⚙️ SETTINGS", "🛠 TOOLS", "🗂 PANEL LIST"],        // row 3
+      ["🔑 CREDENTIALS", "🖥 DASHBOARDS", "📁 FILE MANAGER"],// row 4
+      ["🌐 MASTER REDIRECT", "📝 NOTES", "📌 PIN PANEL"],   // row 5
+      ["💬 FEEDBACK", "❓ HELP", "⚠️ DISCLAIMER"],        // row 6
+      ["🔄 RESTART BOT", "🔒 LOCK PANEL", "♻️ CLEAN LOGS"] // row 7
+    ],
+    resize_keyboard: true
+  };
 }
 
-// Generate inline buttons
-function panelInline(panel) {
-  const url = masterRedirect ? PUBLIC_URL : `${PUBLIC_URL}/s/${panel.token}`;
-  return { inline_keyboard: [[{ text: "Open Panel", url }]] };
+function inlinePanelButtons(panels) {
+  return {
+    inline_keyboard: panels.map(p => [{ text: p.username, url: `https://${p.token}.render.com` }])
+  };
 }
 
-function userPanelsInline(chatId) {
-  const panels = users.get(chatId) || [];
-  return { inline_keyboard: panels.map(p => [
-    { text: p.username, url: `${PUBLIC_URL}/s/${p.token}` },
-    { text: "Delete", callback_data: `delete:${p.token}` }
-  ])};
-}
-
-// ────────────── Telegram Handlers ──────────────
 bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const panel = createUserPanel(chatId);
-  startPHPServer(panel);
-  bot.sendMessage(chatId,
-    `✅ Panel ready\nUsername: ${panel.username}\nPassword: ${panel.password}\nToken: ${panel.token}`,
-    { reply_markup: panelInline(panel) }
-  );
+  bot.sendMessage(msg.chat.id, `Hi, I’m ${BOT_NAME} — Render PHP Multi-Panel Bot`, { reply_markup: mainKB() });
 });
 
-bot.onText(/\/new/, (msg) => {
-  const chatId = msg.chat.id;
-  const panel = createUserPanel(chatId);
-  startPHPServer(panel);
-  bot.sendMessage(chatId,
-    `🆕 New panel created\nUsername: ${panel.username}\nPassword: ${panel.password}\nToken: ${panel.token}`,
-    { reply_markup: panelInline(panel) }
-  );
-});
+bot.on("message", async (msg) => {
+  const text = (msg.text || "").toUpperCase();
+  const cid = msg.chat.id;
 
-bot.onText(/\/panel/, (msg) => {
-  const chatId = msg.chat.id;
-  if (!users.has(chatId)) return bot.sendMessage(chatId, "No panels yet. Use /start");
-  bot.sendMessage(chatId, "Your panels:", { reply_markup: userPanelsInline(chatId) });
-});
+  if (text.includes("NEW PANEL") || text.includes("➕")) {
+    const panel = createUserPanel(cid);
+    bot.sendMessage(cid, `Panel created!\nUser: ${panel.username}\nPass: ${panel.password}\nAccess URL: https://${panel.token}.render.com`, {
+      reply_markup: inlinePanelButtons(users.get(cid))
+    });
+  }
 
-bot.onText(/\/master_redirect/, (msg) => {
-  if (!adminChats.has(msg.chat.id)) return bot.sendMessage(msg.chat.id, "Unauthorized");
-  masterRedirect = !masterRedirect;
-  bot.sendMessage(msg.chat.id, `Master redirect is now ${masterRedirect ? "ON" : "OFF"}`);
-});
+  if (text.includes("MY PANELS") || text.includes("📎")) {
+    const panels = users.get(cid) || [];
+    if (!panels.length) return bot.sendMessage(cid, "No panels yet.");
+    bot.sendMessage(cid, "Your panels:", { reply_markup: inlinePanelButtons(panels) });
+  }
 
-bot.on("callback_query", (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-  if (data.startsWith("delete:")) {
-    const token = data.split(":")[1];
-    const panels = users.get(chatId) || [];
-    const idx = panels.findIndex(u => u.token === token);
-    if (idx !== -1) {
-      fs.rmSync(panels[idx].folder, { recursive: true, force: true });
-      if (phpProcesses.has(token)) phpProcesses.get(token).kill();
-      phpProcesses.delete(token);
-      panels.splice(idx, 1);
-      savePanels();
-      bot.editMessageReplyMarkup({ inline_keyboard: userPanelsInline(chatId).inline_keyboard },
-        { chat_id: chatId, message_id: query.message.message_id });
-      bot.answerCallbackQuery(query.id, { text: "Panel deleted" });
-    }
+  if (text.includes("MASTER REDIRECT") || text.includes("🌐")) {
+    masterRedirect = !masterRedirect;
+    savePanels();
+    bot.sendMessage(cid, `Master redirect is now ${masterRedirect ? "ENABLED" : "DISABLED"}`);
+  }
+
+  if (text.includes("STATUS") || text.includes("📊")) {
+    bot.sendMessage(cid, `Bot online.\nMaster redirect: ${masterRedirect}\nPanels created: ${users.get(cid)?.length || 0}`);
+  }
+
+  if (text.includes("LOG") || text.includes("📝")) {
+    const data = fs.existsSync(path.join(LOGS, "debug.log"))
+      ? fs.readFileSync(path.join(LOGS, "debug.log"), "utf8").slice(-2000)
+      : "No logs";
+    bot.sendMessage(cid, data);
+  }
+
+  if (text.includes("HELP") || text.includes("❓")) {
+    bot.sendMessage(cid, "Commands:\n➕ NEW PANEL\n📎 MY PANELS\n🌐 MASTER REDIRECT\n📊 STATUS\n📝 LOGS", { reply_markup: mainKB() });
   }
 });
 
-// ────────────── Startup ──────────────
-ensureTemplate();
-for (const panels of users.values()) panels.forEach(p => startPHPServer(p));
-log("Massive multi-user PHP manager + Telegram bot online.");
-
-// Optional: Express fallback for /s/:token
-import express from "express";
+// ─────────────────────────────────────
+// EXPRESS BASE SERVER
+// ─────────────────────────────────────
 const app = express();
-app.get("/s/:token", (req,res) => {
-  const token = req.params.token;
-  let panel;
-  for (const panels of users.values()) {
-    panel = panels.find(p => p.token === token);
-    if (panel) break;
-  }
-  if (!panel) return res.status(404).send("Panel not found");
-  const indexFile = path.join(panel.folder, "index.php");
-  res.sendFile(indexFile);
+app.get("/", (req,res) => {
+  res.send(`<h1>${PROJECT_NAME}</h1><p>Use Telegram bot to create and manage your panels.</p>`);
 });
-app.listen(3000, () => log("Express fallback running on 3000"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => log(`Express base server running on port ${PORT}`));
+
+loadPanels();
+log("Bot online & ready for multi-panel PHP hosting on Render");
