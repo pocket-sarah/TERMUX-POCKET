@@ -4,171 +4,140 @@ import path from "path";
 import { spawn } from "child_process";
 import express from "express";
 import TelegramBot from "node-telegram-bot-api";
-import crypto from "crypto";
-import fetch from "node-fetch";
+import { fileURLToPath } from "url";
 
-const BASE = path.resolve(".");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ─────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────
+const BASE = __dirname;
 const WWW = path.join(BASE, "www");
-const LOGS = path.join(BASE, ".logs");
 const DATA = path.join(BASE, ".data");
+const LOGS = path.join(BASE, ".logs");
 const USERS_FILE = path.join(DATA, "users.json");
 
-const BOT_NAME = "Sarah";
-const PROJECT_NAME = "PROJECT-SARAH";
-const TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ";
-const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL;
+const TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ"; // hardcoded bot token
+const URL = process.env.RENDER_EXTERNAL_URL;
 
-if (!fs.existsSync(LOGS)) fs.mkdirSync(LOGS);
-if (!fs.existsSync(DATA)) fs.mkdirSync(DATA);
-if (!fs.existsSync(WWW)) fs.mkdirSync(WWW);
+if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+if (!fs.existsSync(LOGS)) fs.mkdirSync(LOGS, { recursive: true });
+if (!fs.existsSync(WWW)) fs.mkdirSync(WWW, { recursive: true });
 
-// State
-const S = {
-  users: {},
-  servers: {}, // chatId -> {port, process}
+const bot = new TelegramBot(TOKEN, { polling: false }); // webhook preferred on Render
+const app = express();
+
+// ─────────────────────────────────────
+// STATE
+// ─────────────────────────────────────
+const state = {
+  users: {},        // chat_id -> {username, password, urlToken, port}
+  phpServers: {},   // urlToken -> child process
 };
 
-// Utils
-function log(msg) {
-  const line = `[${new Date().toISOString()}] ${msg}`;
-  console.log(line);
-  fs.appendFileSync(path.join(LOGS, "debug.log"), line + "\n");
+// Load users
+if (fs.existsSync(USERS_FILE)) {
+  state.users = JSON.parse(fs.readFileSync(USERS_FILE, "utf8"));
 }
 
-function loadUsers() {
-  if (fs.existsSync(USERS_FILE)) {
-    try { S.users = JSON.parse(fs.readFileSync(USERS_FILE)); }
-    catch { S.users = {}; }
-  }
-}
-
+// Save users
 function saveUsers() {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(S.users, null, 2));
+  fs.writeFileSync(USERS_FILE, JSON.stringify(state.users, null, 2));
 }
 
-function generateCredentials(chatId) {
-  const username = "user_" + chatId;
-  const password = crypto.randomBytes(4).toString("hex");
-  const accessKey = crypto.randomBytes(6).toString("hex");
-  S.users[chatId] = { username, password, accessKey };
-  saveUsers();
-  return S.users[chatId];
+// Generate random password / token
+function randomStr(len = 8) {
+  return [...Array(len)].map(() => Math.random().toString(36)[2]).join("");
 }
 
-function freePort() {
-  return 8000 + Math.floor(Math.random() * 1000); // simple random free-ish port
-}
-
-function startPHPServer(folder, port) {
-  if (!fs.existsSync(folder)) fs.mkdirSync(folder, { recursive: true });
-  const proc = spawn("php", ["-S", `0.0.0.0:${port}`, "-t", folder], {
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  proc.stdout.on("data", d => log(`[PHP:${port}] ${d.toString().trim()}`));
-  proc.stderr.on("data", d => log(`[PHP:${port} ERR] ${d.toString().trim()}`));
+// Spawn PHP built-in server
+function spawnPhpServer(port, folder) {
+  const proc = spawn("php", ["-S", `0.0.0.0:${port}`, "-t", folder]);
+  proc.stdout.on("data", d => console.log(`[PHP ${port}] ${d}`));
+  proc.stderr.on("data", d => console.error(`[PHP ${port} ERROR] ${d}`));
+  proc.on("exit", code => console.log(`[PHP ${port} EXIT] ${code}`));
   return proc;
 }
 
-// Express for root
-const app = express();
-app.use(express.static(WWW));
-app.get("/", (_, res) => res.send(`<h1>${PROJECT_NAME}</h1>`));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => log(`Node web root online @ ${PORT}`));
+// Create user panel
+function createUser(chatId) {
+  if (state.users[chatId]) return state.users[chatId];
 
-// Telegram bot
-const bot = new TelegramBot(TOKEN, { polling: true });
+  const username = `user${chatId}`;
+  const password = randomStr(10);
+  const port = 3000 + Object.keys(state.users).length + 1;
+  const urlToken = randomStr(12);
+  const userDir = path.join(WWW, urlToken);
+  fs.mkdirSync(userDir, { recursive: true });
 
-function mainKB() {
-  return {
-    keyboard: [
-      ["▶️ START", "📎 LINKS MENU", "🆕 NEW SERVER"],
-      ["📊 STATUS", "📝 LOGS", "👁 WATCH"],
-      ["⚙️ SETTINGS", "❓ HELP", "⚠️ DISCLAIMER"]
-    ],
-    resize_keyboard: true
+  // create a simple index.php
+  fs.writeFileSync(path.join(userDir, "index.php"),
+    `<?php echo "<h1>Welcome ${username}</h1>"; ?>`
+  );
+
+  const phpProc = spawnPhpServer(port, userDir);
+  state.phpServers[urlToken] = phpProc;
+
+  const user = { username, password, port, urlToken };
+  state.users[chatId] = user;
+  saveUsers();
+  return user;
+}
+
+// ─────────────────────────────────────
+// TELEGRAM BOT
+// ─────────────────────────────────────
+const mainKeyboard = {
+  keyboard: [
+    ["▶️ START", "📎 LINKS MENU", "⏹ STOP"],
+    ["📊 STATUS", "📝 LOGS", "👁 WATCH"],
+    ["❓ HELP", "⚠️ DISCLAIMER"]
+  ],
+  resize_keyboard: true
+};
+
+bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+  const user = createUser(chatId);
+
+  bot.sendMessage(chatId,
+    `Welcome ${user.username}!\nYour panel is available at:\n${URL}/${user.urlToken}/index.php\nPassword: ${user.password}`,
+    { reply_markup: mainKeyboard }
+  );
+});
+
+// Links menu inline buttons
+bot.onText(/LINKS MENU/, (msg) => {
+  const chatId = msg.chat.id;
+  const user = state.users[chatId];
+  if (!user) return bot.sendMessage(chatId, "No panel yet. Tap START.");
+
+  const inline = {
+    inline_keyboard: [[
+      { text: "Admin Panel", url: `${URL}/${user.urlToken}/index.php` }
+    ]]
   };
-}
-
-function userPanelURL(user, port) {
-  return `http://${PUBLIC_URL}:${port}/panel.php?user=${user.username}&key=${user.accessKey}`;
-}
-
-// START command
-bot.onText(/\/start|START/, (msg) => {
-  const cid = msg.chat.id;
-  if (!S.users[cid]) {
-    const creds = generateCredentials(cid);
-    const port = freePort();
-    const folder = path.join(WWW, creds.username);
-    const proc = startPHPServer(folder, port);
-    S.servers[cid] = { port, process: proc };
-
-    bot.sendMessage(cid,
-      `Welcome to ${PROJECT_NAME}!\n\n` +
-      `• Username: ${creds.username}\n` +
-      `• Password: ${creds.password}\n` +
-      `• Panel: ${userPanelURL(creds, port)}`,
-      { reply_markup: mainKB() }
-    );
-  } else {
-    const user = S.users[cid];
-    const port = S.servers[cid]?.port || freePort();
-    if (!S.servers[cid]) {
-      const folder = path.join(WWW, user.username);
-      const proc = startPHPServer(folder, port);
-      S.servers[cid] = { port, process: proc };
-    }
-    bot.sendMessage(cid,
-      `Welcome back!\nPanel: ${userPanelURL(user, port)}`,
-      { reply_markup: mainKB() }
-    );
-  }
+  bot.sendMessage(chatId, "Your links:", { reply_markup: inline });
 });
 
-// NEW SERVER command
-bot.onText(/NEW SERVER|🆕/, (msg) => {
-  const cid = msg.chat.id;
-  const user = S.users[cid];
-  if (!user) return bot.sendMessage(cid, "Tap START first.");
+// Status
+bot.onText(/STATUS/, (msg) => {
+  const chatId = msg.chat.id;
+  const user = state.users[chatId];
+  if (!user) return bot.sendMessage(chatId, "No panel yet. Tap START.");
 
-  const port = freePort();
-  const folder = path.join(WWW, `${user.username}_server_${port}`);
-  const proc = startPHPServer(folder, port);
-  S.servers[cid] = { port, process: proc };
-
-  bot.sendMessage(cid, `New server ready!\nPanel: ${userPanelURL(user, port)}`);
+  bot.sendMessage(chatId,
+    `Panel: ${user.username}\nPort: ${user.port}\nURL: ${URL}/${user.urlToken}/index.php`,
+    { reply_markup: mainKeyboard }
+  );
 });
 
-// LOGS command
-bot.onText(/LOGS|📝/, (msg) => {
-  const cid = msg.chat.id;
-  const pathLog = path.join(LOGS, "debug.log");
-  const tail = fs.existsSync(pathLog) ? fs.readFileSync(pathLog, "utf8").slice(-1800) : "No logs";
-  bot.sendMessage(cid, "```\n" + tail + "\n```", { parse_mode: "Markdown" });
-});
+// ─────────────────────────────────────
+// EXPRESS FALLBACK
+// ─────────────────────────────────────
+app.use(express.static(WWW));
+app.get("/", (req, res) => res.send("<h1>Render PHP Panel System</h1>"));
 
-// STATUS command
-bot.onText(/STATUS|📊/, async (msg) => {
-  const cid = msg.chat.id;
-  const user = S.users[cid];
-  if (!user) return bot.sendMessage(cid, "Tap START first.");
-  const port = S.servers[cid]?.port || "N/A";
-  bot.sendMessage(cid, `User: ${user.username}\nServer port: ${port}`);
-});
-
-// WATCH loop
-setInterval(async () => {
-  for (const [cid, server] of Object.entries(S.servers)) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${server.port}`);
-      const ok = res.ok;
-      bot.sendMessage(cid, ok ? "✅ Server online" : "⚠️ Server offline");
-    } catch {
-      bot.sendMessage(cid, "⚠️ Server offline");
-    }
-  }
-}, 15000);
-
-loadUsers();
-log("Master Node-PHP Telegram controller online.");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Express fallback running on ${PORT}`));
