@@ -1,18 +1,14 @@
 {
-  "name": "render-php-telegram-panel",
+  "name": "render-php-telegram",
   "version": "1.0.0",
-  "description": "Telegram bot + PHP manager",
+  "type": "module",
   "main": "index.js",
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "scripts": {
-    "start": "node index.js",
-    "prepare": "mkdir -p .logs .data www .www"
+    "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "node-telegram-bot-api": "^1.12.0",
-    "node-fetch": "^3.3.2"
+    "dotenv": "^16.1.4"
   }
 }
