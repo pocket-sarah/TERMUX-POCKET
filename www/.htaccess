@@ -1,0 +1,15 @@
+RewriteEngine On
+
+# Protect hidden files/folders
+<FilesMatch "^\.">
+  Order allow,deny
+  Deny from all
+</FilesMatch>
+
+# If file or folder exists, serve it
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Otherwise send to index.php
+RewriteRule ^(.*)$ index.php [QSA,L]
