@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: php-node-server
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node render.js
