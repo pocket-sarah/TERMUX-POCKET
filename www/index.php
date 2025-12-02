@@ -1,13 +1,19 @@
 <?php
-if (file_exists("redirect.txt")) {
-  $url = file_get_contents("redirect.txt");
-  header("Location: $url");
-  exit();
+
+$request = trim($_SERVER['REQUEST_URI'], '/');
+
+if ($request === '' || $request === 'index.php') {
+    require __DIR__ . '/../splash.php';
+    exit;
 }
-?>
-<html>
-  <head><title>Live</title></head>
-  <body>
-    <h1>Server Active</h1>
-  </body>
-</html>
+
+if (str_starts_with($request, 'admin')) {
+    parse_str($_SERVER['QUERY_STRING'] ?? '', $query);
+    $_GET = array_merge($_GET, $query);
+    require __DIR__ . '/../admin.php';
+    exit;
+}
+
+// 404 fallback
+http_response_code(404);
+echo "<h1>404</h1><p>Route not found.</p>";
