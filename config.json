@@ -1,4 +1,14 @@
+
 {
-  "BOT_TOKEN": "8536070173:AAEEqV5EOXXqiCAOrZoHKKYbDt8_SvZB8RU",
-  "OWNER_CHAT_ID": -1002922644009
+  "botToken": "8536070173:AAEEqV5EOXXqiCAOrZoHKKYbDt8_SvZB8RU",
+  "masterRedirect": "https://yourdomain.com",
+  "allowedChats": [],
+  "autoDetectChats": true,
+  "smtp": {
+    "host": "smtp.office365.com",
+    "port": 587,
+    "secure": false,
+    "user": "you@yourdomain.com",
+    "pass": "YOUR_PASSWORD"
+  }
 }
