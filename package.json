@@ -1,15 +1,20 @@
 {
   "name": "render-php-telegram-controller",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Render Node.js bot to host multiple PHP web panels with Telegram control",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "express": "^4.18.2",
-    "node-fetch": "^3.3.2",
-    "node-telegram-bot-api": "^0.61.0",
-    "nodemailer": "^6.9.4"
-  }
+    "node-telegram-bot-api": "^1.9.0"
+  },
+  "keywords": ["render", "php", "telegram", "bot", "multi-panel"],
+  "author": "YourName",
+  "license": "MIT"
 }
