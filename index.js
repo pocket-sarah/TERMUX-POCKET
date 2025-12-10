@@ -1,78 +1,110 @@
+import TelegramBot from "node-telegram-bot-api";
+import { exec } from "child_process";
+import fs from "fs";
 
-const { spawn } = require("child_process");
-const TelegramBot = require("node-telegram-bot-api");
-const axios = require("axios");
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// ---------------- CONFIG ----------------
-const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_CHAT_ID   = process.env.CHAT_ID;
+const ACTIVE_TUNNELS = {};
+const LOG = msg => console.log("\x1b[36m%s\x1b[0m", msg);  // cyan
+const ERR = msg => console.log("\x1b[31m%s\x1b[0m", msg);  // red
 
-// PHP directory to serve
-const PHP_DIR = "public/";
-
-const TUNNELS = [
-  { name: "tunnel1", port: 8001 },
-  { name: "tunnel2", port: 8002 },
-  { name: "tunnel3", port: 8003 }
-];
-
-// ----------------------------------------
-
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
-
-// PHP SERVER STARTER
-function startPHP(port) {
-  const php = spawn("php", ["-S", `0.0.0.0:${port}`, "-t", PHP_DIR]);
-  php.stdout.on("data", d => console.log(`[PHP ${port}]`, d.toString()));
-  php.stderr.on("data", d => console.log(`[PHP ${port} ERROR]`, d.toString()));
+// Run a shell command as promise
+function run(cmd) {
+  return new Promise((resolve) => {
+    exec(cmd, (err, stdout, stderr) => {
+      if (err) return resolve({ error: stderr });
+      resolve({ output: stdout.trim() });
+    });
+  });
 }
 
-// CLOUDFLARED TUNNEL STARTER
-function startTunnel(name, port) {
-  console.log(`Starting tunnel: ${name} on port ${port}`);
+/* -----------------------------------------------------------
+   CREATE TUNNEL (cloudflared tunnel --url http://localhost:8000)
+----------------------------------------------------------- */
+async function createTunnel(chatId, name) {
+  LOG(`Creating tunnel: ${name}`);
 
-  const tunnel = spawn("cloudflared", [
-    "tunnel", "--url",
-    `http://localhost:${port}`
-  ]);
+  const cmd = `cloudflared tunnel --url http://localhost:8000 --no-autoupdate`;
+  const result = await run(cmd);
 
-  tunnel.stdout.on("data", async d => {
-    const out = d.toString();
-    console.log(`[${name}]`, out);
+  if (result.error) {
+    ERR(result.error);
+    return bot.sendMessage(chatId, "❌ Failed to create tunnel");
+  }
 
-    // Detect the assigned URL
-    const match = out.match(/https:\/\/[a-zA-Z0-9.-]+\.trycloudflare\.com/);
-    if (match) {
-      const url = match[0];
+  // Extract https URL
+  const match = result.output.match(/https:\/\/[^\s]+/);
+  const url = match ? match[0] : null;
 
-      await bot.sendMessage(
-        TELEGRAM_CHAT_ID,
-        `🔥 *New Tunnel Active*\n\nTunnel: *${name}*\nURL: ${url}`,
-        { parse_mode: "Markdown" }
-      );
-    }
-  });
+  if (!url) {
+    return bot.sendMessage(chatId, "❌ Tunnel created, but URL missing");
+  }
 
-  tunnel.stderr.on("data", d =>
-    console.log(`[${name} ERROR]`, d.toString())
+  ACTIVE_TUNNELS[name] = url;
+
+  bot.sendMessage(
+    chatId,
+    `🚀 *Tunnel Created*\n\nName: *${name}*\nURL: ${url}`,
+    { parse_mode: "Markdown" }
   );
 
-  // Auto‑restart on crash
-  tunnel.on("close", code => {
-    console.log(`Tunnel ${name} closed with code ${code}, restarting...`);
-    setTimeout(() => startTunnel(name, port), 2000);
+  LOG(`Tunnel ready: ${url}`);
+}
+
+/* -----------------------------------------------------------
+   START PHP SERVER
+----------------------------------------------------------- */
+async function startPHP(chatId) {
+  LOG("Starting PHP server…");
+
+  const cmd = `php -S 0.0.0.0:8000 -t public`;
+  run(cmd);
+
+  bot.sendMessage(chatId, "🟢 PHP server started on *:8000*", {
+    parse_mode: "Markdown"
   });
 }
 
-// ---------- INIT SYSTEM ----------
-(async () => {
-  console.log("System starting...");
+/* -----------------------------------------------------------
+   COMMANDS
+----------------------------------------------------------- */
 
-  // Start all PHP servers
-  for (const t of TUNNELS) startPHP(t.port);
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    `✨ Welcome! Your bot is online.
 
-  // Start all tunnels
-  for (const t of TUNNELS) startTunnel(t.name, t.port);
+Commands:
+• /php – start PHP
+• /tunnel <name> – create a Cloudflare tunnel
+• /list – show active tunnels`
+  );
+});
 
-  bot.sendMessage(TELEGRAM_CHAT_ID, "🚀 System booted.");
-})();
+bot.onText(/\/php/, (msg) => {
+  startPHP(msg.chat.id);
+});
+
+bot.onText(/\/tunnel (.+)/, (msg, match) => {
+  const name = match[1].trim();
+  createTunnel(msg.chat.id, name);
+});
+
+bot.onText(/\/list/, (msg) => {
+  if (Object.keys(ACTIVE_TUNNELS).length === 0)
+    return bot.sendMessage(msg.chat.id, "No active tunnels.");
+
+  let txt = "🌐 *Active tunnels:*\n\n";
+  for (const [name, url] of Object.entries(ACTIVE_TUNNELS)) {
+    txt += `• *${name}*: ${url}\n`;
+  }
+
+  bot.sendMessage(msg.chat.id, txt, { parse_mode: "Markdown" });
+});
+
+/* -----------------------------------------------------------
+   BOOT MESSAGE
+----------------------------------------------------------- */
+
+LOG("Telegram bot online.");
