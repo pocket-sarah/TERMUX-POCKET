@@ -1,14 +1,14 @@
 {
-  "name": "termux-pocket-bot",
+  "name": "tunnel-manager",
   "version": "1.0.0",
-  "type": "module",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "node-telegram-bot-api": "^1.12.0",
-    "dotenv": "^16.1.4"
+    "axios": "^1.7.7",
+    "node-telegram-bot-api": "^0.61.0"
   }
+}
 }
