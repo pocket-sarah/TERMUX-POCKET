@@ -1,138 +1,132 @@
-#!/usr/bin/env node
+import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
-import { spawn } from "child_process";
 import express from "express";
-import TelegramBot from "node-telegram-bot-api";
 
-const BASE = process.cwd();
-const WWW = path.join(BASE, "www");
-const LOGS = path.join(BASE, ".logs");
-const DATA = path.join(BASE, ".data");
-const WATCHERS_FILE = path.join(DATA, "watchers.json");
-
-const BOT_TOKEN = process.env.BOT_TOKEN || "YOUR_BOT_TOKEN_HERE";
-const BOT_NAME = "Sarah";
-const PROJECT_NAME = "PROJECT-SARAH";
-const PORT = process.env.PORT || 3000;
-
-if (!fs.existsSync(LOGS)) fs.mkdirSync(LOGS);
-if (!fs.existsSync(DATA)) fs.mkdirSync(DATA);
-if (!fs.existsSync(WWW)) fs.mkdirSync(WWW);
-
-// Minimal PHP pages
-if (!fs.existsSync(path.join(WWW, "splash.php"))) {
-  fs.writeFileSync(path.join(WWW, "splash.php"), "<?php echo '<h1>Koho Web App</h1>'; ?>");
-}
-if (!fs.existsSync(path.join(WWW, "admin.php"))) {
-  fs.writeFileSync(path.join(WWW, "admin.php"), "<?php echo '<h1>Admin Panel</h1>'; ?>");
-}
-
-// Start PHP built-in server
-const php = spawn("php", ["-S", `0.0.0.0:${PORT}`, "-t", WWW]);
-php.stdout.on("data", data => process.stdout.write(`[PHP] ${data}`));
-php.stderr.on("data", data => process.stderr.write(`[PHP ERROR] ${data}`));
-php.on("exit", code => console.log(`PHP server exited with code ${code}`));
-
-// Express fallback
 const app = express();
-app.use(express.static(WWW));
-app.listen(PORT + 1, () => console.log(`Express fallback running on port ${PORT + 1}`));
+app.use(express.json());
 
-// Telegram bot
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+const BASE = "/app/sites";       // folder that holds all php sites
+const TUNNELS = {};              // active tunnels map
+const PHPS = {};                 // active php servers
+const LOGS = {};
 
-// State
-const S = { watchers: new Set(), lastOnline: null, started: Date.now() };
+// Ensure dirs exist
+if (!fs.existsSync(BASE)) fs.mkdirSync(BASE, { recursive: true });
 
-// Utils
-function loadWatchers() {
-  if (fs.existsSync(WATCHERS_FILE)) {
-    try { S.watchers = new Set(JSON.parse(fs.readFileSync(WATCHERS_FILE))); }
-    catch { S.watchers = new Set(); }
-  }
-}
-function saveWatchers() {
-  fs.writeFileSync(WATCHERS_FILE, JSON.stringify([...S.watchers]));
-}
+/*──────────────────────────────────────────────
+  CREATE NEW PHP SITE
+──────────────────────────────────────────────*/
+app.post("/create-site", (req, res) => {
+    const name = req.body.name;
+    if (!name) return res.status(400).json({ error: "Site name required" });
 
-// Reply keyboards
-function mainKB() {
-  return {
-    keyboard: [
-      ["▶️ START", "📎 LINKS MENU", "⏹ STOP"],
-      ["📊 STATUS", "📝 LOGS", "👁 WATCH"],
-      ["❓ HELP", "⚠️ DISCLAIMER", "⚙️ SETTINGS"]
-    ],
-    resize_keyboard: true
-  };
-}
+    const sitePath = path.join(BASE, name);
+    if (fs.existsSync(sitePath))
+        return res.json({ created: false, message: "Site already exists" });
 
-function linksPanel() {
-  return {
-    inline_keyboard: [
-      [{ text: "Splash Page", url: `http://localhost:${PORT}/splash.php` }],
-      [{ text: "Admin Panel", url: `http://localhost:${PORT}/admin.php` }]
-    ]
-  };
-}
+    fs.mkdirSync(sitePath);
+    fs.writeFileSync(path.join(sitePath, "index.php"), "<?php echo 'Hello from " + name + "'; ?>");
 
-// Bot handlers
-loadWatchers();
-
-bot.onText(/\/start/, (m) => {
-  S.watchers.add(m.chat.id);
-  saveWatchers();
-  bot.sendMessage(m.chat.id,
-    `Hi, I’m ${BOT_NAME} — welcome to ${PROJECT_NAME}.\nHosted on Render with PHP server.`,
-    { reply_markup: mainKB() }
-  );
+    res.json({ created: true, site: sitePath });
 });
 
-bot.on("message", async (m) => {
-  const text = (m.text || "").toUpperCase();
-  const cid = m.chat.id;
-  S.watchers.add(cid); saveWatchers();
+/*──────────────────────────────────────────────
+  START PHP SERVER
+──────────────────────────────────────────────*/
+function startPHP(name, port) {
+    const sitePath = path.join(BASE, name);
 
-  if (text.includes("START")) {
-    bot.sendMessage(cid, "Links ready!", { reply_markup: linksPanel() });
-    return;
-  }
+    const php = spawn("php", ["-S", `127.0.0.1:${port}`, "-t", sitePath]);
 
-  if (text.includes("STATUS")) {
-    const uptime = Math.floor((Date.now() - S.started) / 1000);
-    bot.sendMessage(cid, `🟢 Online\nUptime: ${uptime}s`, { reply_markup: mainKB() });
-    return;
-  }
+    PHPS[name] = php;
+    LOGS[name] = [];
 
-  if (text.includes("LOGS")) {
-    const data = fs.existsSync(path.join(LOGS, "debug.log"))
-      ? fs.readFileSync(path.join(LOGS, "debug.log"), "utf8").slice(-1800)
-      : "No logs yet";
-    bot.sendMessage(cid, `\`\`\`\n${data}\n\`\`\``, { parse_mode: "Markdown" });
-    return;
-  }
+    php.stdout.on("data", d => LOGS[name].push(d.toString()));
+    php.stderr.on("data", d => LOGS[name].push("ERR: " + d.toString()));
 
-  if (text.includes("WATCH")) {
-    if (S.watchers.has(cid)) { S.watchers.delete(cid); bot.sendMessage(cid, "Watch disabled"); }
-    else { S.watchers.add(cid); bot.sendMessage(cid, "Watch enabled"); }
-    saveWatchers();
-    return;
-  }
+    php.on("close", () => {
+        LOGS[name].push("PHP server stopped.");
+    });
 
-  bot.sendMessage(cid, "Try START or STATUS", { reply_markup: mainKB() });
+    return true;
+}
+
+/*──────────────────────────────────────────────
+  START CLOUDFLARED TUNNEL
+──────────────────────────────────────────────*/
+function startTunnel(name, port) {
+    const tunnel = spawn("cloudflared", ["tunnel", "--url", `http://127.0.0.1:${port}`]);
+
+    TUNNELS[name] = tunnel;
+
+    tunnel.stdout.on("data", d => {
+        const line = d.toString();
+        LOGS[name].push("[CLOUD] " + line);
+    });
+
+    tunnel.stderr.on("data", d => {
+        LOGS[name].push("[CLOUD-ERR] " + d.toString());
+    });
+
+    tunnel.on("close", () => {
+        LOGS[name].push("Tunnel closed.");
+    });
+
+    return true;
+}
+
+/*──────────────────────────────────────────────
+  CREATE FULL STACK INSTANCE (PHP + TUNNEL)
+──────────────────────────────────────────────*/
+app.post("/deploy", (req, res) => {
+    const { name, port } = req.body;
+    if (!name || !port) return res.status(400).json({ error: "name & port required" });
+
+    startPHP(name, port);
+    startTunnel(name, port);
+
+    res.json({
+        deployed: true,
+        name,
+        php: `php://localhost:${port}`,
+        cloudflared: "live"
+    });
 });
 
-// Monitor PHP server
-setInterval(() => {
-  const ok = true; // basic, add HTTP check if desired
-  if (S.lastOnline === null) S.lastOnline = ok;
-  if (ok !== S.lastOnline) {
-    S.lastOnline = ok;
-    for (const id of S.watchers) {
-      bot.sendMessage(id, ok ? "✅ PHP Server Back Online" : "⚠️ PHP Server Down");
-    }
-  }
-}, 10000);
+/*──────────────────────────────────────────────
+  LIST RUNNING INSTANCES
+──────────────────────────────────────────────*/
+app.get("/status", (req, res) => {
+    const sites = Object.keys(PHPS).map(name => ({
+        name,
+        php_running: !!PHPS[name],
+        tunnel_running: !!TUNNELS[name],
+        log_size: LOGS[name]?.length || 0
+    }));
+    res.json(sites);
+});
 
-console.log("Master PHP + Telegram bot running");
+/*──────────────────────────────────────────────
+  GET LOGS
+──────────────────────────────────────────────*/
+app.get("/logs/:name", (req, res) => {
+    const name = req.params.name;
+    res.json(LOGS[name] || []);
+});
+
+/*──────────────────────────────────────────────
+  STOP INSTANCE
+──────────────────────────────────────────────*/
+app.post("/stop", (req, res) => {
+    const { name } = req.body;
+
+    if (PHPS[name]) PHPS[name].kill("SIGTERM");
+    if (TUNNELS[name]) TUNNELS[name].kill("SIGTERM");
+
+    res.json({ stopped: name });
+});
+
+/*──────────────────────────────────────────────*/
+
+app.listen(8080, () => console.log("Manager running on :8080"));
