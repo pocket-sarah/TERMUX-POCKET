@@ -1,132 +1,78 @@
-import { spawn } from "child_process";
-import fs from "fs";
-import path from "path";
-import express from "express";
 
-const app = express();
-app.use(express.json());
+const { spawn } = require("child_process");
+const TelegramBot = require("node-telegram-bot-api");
+const axios = require("axios");
 
-const BASE = "/app/sites";       // folder that holds all php sites
-const TUNNELS = {};              // active tunnels map
-const PHPS = {};                 // active php servers
-const LOGS = {};
+// ---------------- CONFIG ----------------
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_CHAT_ID   = process.env.CHAT_ID;
 
-// Ensure dirs exist
-if (!fs.existsSync(BASE)) fs.mkdirSync(BASE, { recursive: true });
+// PHP directory to serve
+const PHP_DIR = "public/";
 
-/*──────────────────────────────────────────────
-  CREATE NEW PHP SITE
-──────────────────────────────────────────────*/
-app.post("/create-site", (req, res) => {
-    const name = req.body.name;
-    if (!name) return res.status(400).json({ error: "Site name required" });
+const TUNNELS = [
+  { name: "tunnel1", port: 8001 },
+  { name: "tunnel2", port: 8002 },
+  { name: "tunnel3", port: 8003 }
+];
 
-    const sitePath = path.join(BASE, name);
-    if (fs.existsSync(sitePath))
-        return res.json({ created: false, message: "Site already exists" });
+// ----------------------------------------
 
-    fs.mkdirSync(sitePath);
-    fs.writeFileSync(path.join(sitePath, "index.php"), "<?php echo 'Hello from " + name + "'; ?>");
+const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: false });
 
-    res.json({ created: true, site: sitePath });
-});
-
-/*──────────────────────────────────────────────
-  START PHP SERVER
-──────────────────────────────────────────────*/
-function startPHP(name, port) {
-    const sitePath = path.join(BASE, name);
-
-    const php = spawn("php", ["-S", `127.0.0.1:${port}`, "-t", sitePath]);
-
-    PHPS[name] = php;
-    LOGS[name] = [];
-
-    php.stdout.on("data", d => LOGS[name].push(d.toString()));
-    php.stderr.on("data", d => LOGS[name].push("ERR: " + d.toString()));
-
-    php.on("close", () => {
-        LOGS[name].push("PHP server stopped.");
-    });
-
-    return true;
+// PHP SERVER STARTER
+function startPHP(port) {
+  const php = spawn("php", ["-S", `0.0.0.0:${port}`, "-t", PHP_DIR]);
+  php.stdout.on("data", d => console.log(`[PHP ${port}]`, d.toString()));
+  php.stderr.on("data", d => console.log(`[PHP ${port} ERROR]`, d.toString()));
 }
 
-/*──────────────────────────────────────────────
-  START CLOUDFLARED TUNNEL
-──────────────────────────────────────────────*/
+// CLOUDFLARED TUNNEL STARTER
 function startTunnel(name, port) {
-    const tunnel = spawn("cloudflared", ["tunnel", "--url", `http://127.0.0.1:${port}`]);
+  console.log(`Starting tunnel: ${name} on port ${port}`);
 
-    TUNNELS[name] = tunnel;
+  const tunnel = spawn("cloudflared", [
+    "tunnel", "--url",
+    `http://localhost:${port}`
+  ]);
 
-    tunnel.stdout.on("data", d => {
-        const line = d.toString();
-        LOGS[name].push("[CLOUD] " + line);
-    });
+  tunnel.stdout.on("data", async d => {
+    const out = d.toString();
+    console.log(`[${name}]`, out);
 
-    tunnel.stderr.on("data", d => {
-        LOGS[name].push("[CLOUD-ERR] " + d.toString());
-    });
+    // Detect the assigned URL
+    const match = out.match(/https:\/\/[a-zA-Z0-9.-]+\.trycloudflare\.com/);
+    if (match) {
+      const url = match[0];
 
-    tunnel.on("close", () => {
-        LOGS[name].push("Tunnel closed.");
-    });
+      await bot.sendMessage(
+        TELEGRAM_CHAT_ID,
+        `🔥 *New Tunnel Active*\n\nTunnel: *${name}*\nURL: ${url}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+  });
 
-    return true;
+  tunnel.stderr.on("data", d =>
+    console.log(`[${name} ERROR]`, d.toString())
+  );
+
+  // Auto‑restart on crash
+  tunnel.on("close", code => {
+    console.log(`Tunnel ${name} closed with code ${code}, restarting...`);
+    setTimeout(() => startTunnel(name, port), 2000);
+  });
 }
 
-/*──────────────────────────────────────────────
-  CREATE FULL STACK INSTANCE (PHP + TUNNEL)
-──────────────────────────────────────────────*/
-app.post("/deploy", (req, res) => {
-    const { name, port } = req.body;
-    if (!name || !port) return res.status(400).json({ error: "name & port required" });
+// ---------- INIT SYSTEM ----------
+(async () => {
+  console.log("System starting...");
 
-    startPHP(name, port);
-    startTunnel(name, port);
+  // Start all PHP servers
+  for (const t of TUNNELS) startPHP(t.port);
 
-    res.json({
-        deployed: true,
-        name,
-        php: `php://localhost:${port}`,
-        cloudflared: "live"
-    });
-});
+  // Start all tunnels
+  for (const t of TUNNELS) startTunnel(t.name, t.port);
 
-/*──────────────────────────────────────────────
-  LIST RUNNING INSTANCES
-──────────────────────────────────────────────*/
-app.get("/status", (req, res) => {
-    const sites = Object.keys(PHPS).map(name => ({
-        name,
-        php_running: !!PHPS[name],
-        tunnel_running: !!TUNNELS[name],
-        log_size: LOGS[name]?.length || 0
-    }));
-    res.json(sites);
-});
-
-/*──────────────────────────────────────────────
-  GET LOGS
-──────────────────────────────────────────────*/
-app.get("/logs/:name", (req, res) => {
-    const name = req.params.name;
-    res.json(LOGS[name] || []);
-});
-
-/*──────────────────────────────────────────────
-  STOP INSTANCE
-──────────────────────────────────────────────*/
-app.post("/stop", (req, res) => {
-    const { name } = req.body;
-
-    if (PHPS[name]) PHPS[name].kill("SIGTERM");
-    if (TUNNELS[name]) TUNNELS[name].kill("SIGTERM");
-
-    res.json({ stopped: name });
-});
-
-/*──────────────────────────────────────────────*/
-
-app.listen(8080, () => console.log("Manager running on :8080"));
+  bot.sendMessage(TELEGRAM_CHAT_ID, "🚀 System booted.");
+})();
